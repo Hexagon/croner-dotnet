@@ -1,5 +1,7 @@
 # Croner for .NET
 
+Croner is available for [JavaScript/TypeScript](https://github.com/Hexagon/croner) · [Rust](https://github.com/Hexagon/croner-rust) · [Python](https://github.com/Hexagon/croner-py) · **.NET** · [C++](https://github.com/Hexagon/croner-cpp)
+
 Trigger functions and/or evaluate cron expressions in .NET. No dependencies. Most features.
 
 A port of [croner](https://github.com/hexagon/croner) (JavaScript) and [croner-rust](https://github.com/hexagon/croner-rust), sharing their pattern syntax, DST rules and test cases.
@@ -233,16 +235,6 @@ dotnet pack src/Croner -c Release
 ```
 
 Releases are published to NuGet by `.github/workflows/build.yml` through trusted publishing: push a tag such as `v1.0.0` and the package is built, tested and pushed with that version.
-
-## Other implementations
-
-Croner is available in several languages. The implementations share pattern syntax, DST rules and test cases:
-
-- **JavaScript / TypeScript**: [croner](https://github.com/Hexagon/croner), Node, Deno, Bun and browsers, on [npm](https://www.npmjs.com/package/croner) and [JSR](https://jsr.io/@hexagon/croner)
-- **Rust**: [croner-rust](https://github.com/Hexagon/croner-rust), on [crates.io](https://crates.io/crates/croner)
-- **Python**: [croner-py](https://github.com/Hexagon/croner-py), on [PyPI](https://pypi.org/project/croner/)
-- **.NET**: croner-dotnet (this repository)
-- **C++**: [croner-cpp](https://github.com/Hexagon/croner-cpp), header-only, C++17
 
 ## License
 
