@@ -232,6 +232,8 @@ dotnet test
 dotnet pack src/Croner -c Release
 ```
 
+Releases are published to NuGet by `.github/workflows/build.yml` through trusted publishing: push a tag such as `v1.0.0` and the package is built, tested and pushed with that version.
+
 ## License
 
 MIT
