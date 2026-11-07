@@ -1,5 +1,7 @@
 # Croner for .NET
 
+Croner is available for [JavaScript/TypeScript](https://github.com/Hexagon/croner) · [Rust](https://github.com/Hexagon/croner-rust) · [Python](https://github.com/Hexagon/croner-py) · **.NET** · [C++](https://github.com/Hexagon/croner-cpp)
+
 Trigger functions and/or evaluate cron expressions in .NET. No dependencies. Most features.
 
 A port of [croner](https://github.com/hexagon/croner) (JavaScript) and [croner-rust](https://github.com/hexagon/croner-rust), sharing their pattern syntax, DST rules and test cases.
