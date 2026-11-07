@@ -97,8 +97,12 @@ public class DstTests
             cron.FindNextOccurrence(At(toronto, 1919, 3, 25, 12), Zone(toronto))));
         Assert.Same(work, await Task.WhenAny(work, Task.Delay(TimeSpan.FromSeconds(20))));
         var (backward, forward) = await work;
-        Same(At(toronto, 1918, 3, 30, 23, 45), backward);
-        Same(At(toronto, 1920, 3, 30, 23, 45), forward);
+
+        // IANA data (Linux, macOS) skips 23:30-00:30 on 1919-03-30, so 23:45 that day never happens.
+        // Windows' own zone data has no 1919 history, so there the time exists and is the answer.
+        bool skipped1919 = Zone(toronto).IsInvalidTime(D(1919, 3, 30, 23, 45));
+        Same(At(toronto, skipped1919 ? 1918 : 1919, 3, 30, 23, 45), backward);
+        Same(At(toronto, skipped1919 ? 1920 : 1919, 3, 30, 23, 45), forward);
     }
 
     [Fact]
