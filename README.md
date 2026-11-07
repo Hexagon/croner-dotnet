@@ -2,15 +2,16 @@
 
 Croner is available for [JavaScript/TypeScript](https://github.com/Hexagon/croner) · [Rust](https://github.com/Hexagon/croner-rust) · [Python](https://github.com/Hexagon/croner-py) · **.NET** · [C++](https://github.com/Hexagon/croner-cpp)
 
-Trigger functions and/or evaluate cron expressions in .NET. No dependencies. Most features.
+[![NuGet](https://img.shields.io/nuget/v/Croner.svg)](https://www.nuget.org/packages/Croner) [![Build](https://github.com/hexagon/croner-dotnet/actions/workflows/build.yml/badge.svg)](https://github.com/hexagon/croner-dotnet/actions/workflows/build.yml)
 
-A port of [croner](https://github.com/hexagon/croner) (JavaScript) and [croner-rust](https://github.com/hexagon/croner-rust), sharing their pattern syntax, DST rules and test cases.
+Cron expressions and scheduled jobs for .NET, with daylight saving time handled correctly.
 
-- Parses [OCPS](https://github.com/open-source-cron/ocps)-compliant patterns: seconds and years (5, 6 or 7 fields), `L`, `W`, `LW`, `#`, `?`, `+`, nicknames like `@daily`, and month and weekday names.
-- Finds next and previous occurrences in any `TimeZoneInfo`, with correct handling of daylight saving time.
-- Describes patterns in plain English (or Swedish, or your own language).
-- Schedules jobs, with pause/resume/stop, max runs, minimum interval, overrun protection, error handling, start/stop dates and day offsets.
-- Zero dependencies. Targets .NET 8 and .NET 10. Trimming- and AOT-compatible.
+- **Parse** [OCPS](https://github.com/open-source-cron/ocps)-compliant patterns: 5, 6 or 7 fields (seconds and years), `L`, `W`, `LW`, `#`, `?`, `+`, nicknames like `@daily`, and month and weekday names. Quartz-style weekday numbering on request.
+- **Search** next and previous occurrences in any `TimeZoneInfo`, or iterate them lazily. Times skipped or repeated by a DST change are handled by well-defined rules, in both directions.
+- **Describe** patterns in plain English or Swedish, or your own language: `"At 07:30, on Monday, Tuesday, Wednesday, Thursday, and Friday."`
+- **Schedule** sync or async callbacks with pause/resume/stop, max runs, minimum interval, overrun protection, error handling, start/stop dates and day offsets.
+- **Test** schedules deterministically: jobs take their clock and timers from a `TimeProvider`.
+- No dependencies. Targets .NET 8 and .NET 10. Trimming- and AOT-compatible. `Cron` is immutable and thread-safe.
 
 ## Installation
 
@@ -50,8 +51,12 @@ using var report = new CronJob("0 30 7 * * MON-FRI", async j =>
 ## Evaluating patterns: `Cron`
 
 ```csharp
-var cron = Cron.Parse("0 12 * * MON-FRI");                       // throws CronException when invalid
-Cron.TryParse("0 12 * * MON-FRI", out Cron? maybe);              // or not
+var cron = Cron.Parse("0 12 * * MON-FRI");     // throws CronException when invalid
+
+if (Cron.TryParse(userInput, out Cron? parsed))  // returns false for null or invalid input
+{
+    Console.WriteLine(parsed.Describe());
+}
 
 // With parser options
 var quartz = Cron.Parse("0 0 12 ? * 2-6", new CronParserOptions
@@ -121,7 +126,7 @@ p.IsDomWildcard;           // true
 cron.JobType;              // FixedTime or IntervalWildcard (decides DST behaviour)
 ```
 
-`Cron` and `CronPattern` compare by schedule, not by spelling: `Cron.Parse("0 0 * * MON-FRI").Equals(Cron.Parse("0 0 * * 1-5"))` is `true`.
+`Cron` and `CronPattern` compare by their parsed fields, not by spelling: `Cron.Parse("0 0 * * MON-FRI").Equals(Cron.Parse("0 0 * * 1-5"))` is `true`.
 
 ## Scheduling jobs: `CronJob`
 
@@ -176,6 +181,62 @@ A `CronJob` created without a callback only evaluates its schedule; `Schedule(ca
 
 Without `Catch` or `OnError`, an exception thrown by a scheduled run is rethrown on the thread pool, which ends the process like any unhandled exception in a timer callback. `Trigger()` always lets the exception reach its caller.
 
+A run that is due while the process is suspended, or while the clock jumps forward, runs once when the timer fires; missed runs are not repeated.
+
+### In a hosted application
+
+A `CronJob` runs on its own timer, so an `IHostedService` only has to start and stop it:
+
+```csharp
+builder.Services.AddHostedService<ReportService>();
+
+sealed class ReportService : IHostedService, IDisposable
+{
+    private CronJob? _job;
+
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        _job = new CronJob("0 30 7 * * MON-FRI", _ => SendReportAsync(), new CronJobOptions
+        {
+            TimeZone = TimeZoneInfo.FindSystemTimeZoneById("Europe/Stockholm"),
+            Protect = true,
+            OnError = (e, _) => Console.WriteLine(e),
+        });
+        return Task.CompletedTask;
+    }
+
+    public Task StopAsync(CancellationToken cancellationToken)
+    {
+        _job?.Stop();
+        return Task.CompletedTask;
+    }
+
+    public void Dispose() => _job?.Dispose();
+}
+```
+
+### Testing
+
+Pass a `TimeProvider` to control time, for example `FakeTimeProvider` from [Microsoft.Extensions.TimeProvider.Testing](https://www.nuget.org/packages/Microsoft.Extensions.TimeProvider.Testing):
+
+```csharp
+var time = new FakeTimeProvider(new DateTimeOffset(2025, 1, 1, 0, 0, 0, TimeSpan.Zero));
+int runs = 0;
+using var job = new CronJob("0 * * * *", _ => runs++, new CronJobOptions
+{
+    TimeProvider = time,
+    TimeZone = TimeZoneInfo.Utc,
+});
+
+for (int i = 0; i < 3; i++)
+{
+    time.Advance(TimeSpan.FromHours(1));
+}
+// runs == 3
+```
+
+Advance the clock one run at a time: a single `Advance(TimeSpan.FromHours(3))` is a clock jump, and runs once.
+
 ## Pattern
 
 ```
@@ -200,7 +261,7 @@ Without `Catch` or `OnError`, an exception thrown by a scheduled run is rethrown
 | Day of week | Yes | 0-7 or SUN-SAT | `* , - / ? L # +` | `5L` = last Friday, `1#2` = second Monday, `+` prefix = AND with day of month |
 | Year | Optional | 1-5000 | `* , - /` | |
 
-- Patterns are case-insensitive. Leading zeros and extra whitespace are fine.
+- Patterns are case-insensitive. Leading zeros and extra whitespace are fine. Month names are only accepted in the month field, and weekday names in the day-of-week field.
 - With 5 fields, seconds default to `0`; without a year, any year matches.
 - Steps need a starting point, as in Vixie cron and OCPS: `*/10` and `5-59/10` work; `0/10` and `/10` need `SloppyRanges`.
 - When both day of month and day of week are set, a day matching **either** runs (OR, as in Vixie cron). Use `DomAndDow = true`, or prefix the day of week with `+` (`0 0 1 * +MON`), to require both.
@@ -215,7 +276,7 @@ Without `Catch` or `OnError`, an exception thrown by a scheduled run is rethrown
 
 ## Daylight saving time
 
-Searches walk the wall clock of the requested time zone and follow the same rules as croner and croner-rust:
+Patterns describe wall clock time, but a time zone's clock sometimes skips an hour (spring forward) or repeats one (fall back). Searches walk the wall clock of the requested time zone and resolve those hours by the kind of pattern (`Cron.JobType`):
 
 - **Fixed-time jobs** (single second, minute and hour, e.g. `0 30 2 * * *`):
   - when the clock jumps forward over the run time, the job runs at the first instant after the jump;
