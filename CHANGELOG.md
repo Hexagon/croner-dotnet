@@ -1,8 +1,8 @@
 # Changelog
 
-## 1.0.0
+## 1.0.0-preview.2
 
-First stable release. Shares its pattern syntax, DST rules and test cases with the other Croner implementations.
+Second preview of the first release. Shares its pattern syntax, DST rules and test cases with the other Croner implementations.
 
 - `Cron`: parse OCPS-compliant patterns (5-7 fields, `L`, `W`, `LW`, `#`, `?`, `+`, nicknames), match times,
   get next/previous occurrences and enumerate them in any `TimeZoneInfo` with well-defined DST rules.
@@ -17,7 +17,7 @@ First stable release. Shares its pattern syntax, DST rules and test cases with t
 
 The API was reworked to follow .NET conventions. Renamed members:
 
-| 1.0.0-preview.1 | 1.0.0 |
+| 1.0.0-preview.1 | 1.0.0-preview.2 |
 | --- | --- |
 | `Cron.FindNextOccurrence` / `FindPreviousOccurrence` | `GetNextOccurrence` / `GetPreviousOccurrence` |
 | `Cron.TryFindOccurrence(start, zone, inclusive, direction, out)` | `TryGetNextOccurrence` / `TryGetPreviousOccurrence` |
