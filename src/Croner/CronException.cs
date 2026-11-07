@@ -20,16 +20,16 @@ public enum CronErrorKind
     /// The search for the next or previous matching time exceeded a reasonable limit,
     /// typically because the pattern never matches (for example <c>0 0 30 2 *</c>).
     /// </summary>
-    TimeSearchLimitExceeded,
+    SearchLimitExceeded,
 
     /// <summary>The cron pattern provided is invalid, for example it has the wrong number of fields.</summary>
     InvalidPattern,
 
     /// <summary>The pattern contains characters that are not allowed.</summary>
-    IllegalCharacters,
+    IllegalCharacter,
 
     /// <summary>A single field of the pattern is invalid, for example a value is out of range.</summary>
-    ComponentError,
+    InvalidField,
 }
 
 /// <summary>
@@ -53,13 +53,13 @@ public sealed class CronException : Exception
 
     private static string FormatMessage(CronErrorKind kind, string? detail) => kind switch
     {
-        CronErrorKind.TimeSearchLimitExceeded => "No matching time was found within the search limits.",
+        CronErrorKind.SearchLimitExceeded => "No matching time was found within the search limits.",
         CronErrorKind.EmptyPattern => "The pattern is empty.",
         CronErrorKind.InvalidDate => "Encountered an invalid date.",
         CronErrorKind.InvalidTime => "Encountered an invalid time.",
         CronErrorKind.InvalidPattern => $"Invalid pattern: {detail}",
-        CronErrorKind.IllegalCharacters => $"Pattern contains an illegal character: {detail}",
-        CronErrorKind.ComponentError => $"Invalid field: {detail}",
+        CronErrorKind.IllegalCharacter => $"Pattern contains an illegal character: {detail}",
+        CronErrorKind.InvalidField => $"Invalid field: {detail}",
         _ => detail ?? kind.ToString(),
     };
 }

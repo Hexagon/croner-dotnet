@@ -9,27 +9,27 @@ public class ParserTests
     public void ParsesBasicPattern()
     {
         var cron = Cron.Parse("*/5 * * * *");
-        Assert.Equal("*/5 * * * *", cron.Pattern.Pattern);
+        Assert.Equal("*/5 * * * *", cron.Pattern.Expression);
         Assert.Equal("*/5 * * * *", cron.ToString());
-        Assert.Equal(new[] { 0 }, cron.Pattern.Seconds.Values());
-        Assert.Contains(5, cron.Pattern.Minutes.Values());
+        Assert.Equal(new[] { 0 }, cron.Pattern.Seconds.GetValues());
+        Assert.Contains(5, cron.Pattern.Minutes.GetValues());
     }
 
     [Fact]
     public void SixFieldsIncludeSeconds()
     {
         var cron = Cron.Parse("* */5 * * * *");
-        Assert.Equal(60, cron.Pattern.Seconds.Values().Count);
-        Assert.Equal(new[] { 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55 }, cron.Pattern.Minutes.Values());
+        Assert.Equal(60, cron.Pattern.Seconds.GetValues().Count);
+        Assert.Equal(new[] { 0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55 }, cron.Pattern.Minutes.GetValues());
     }
 
     [Fact]
     public void ShortSteppedPattern()
     {
         var cron = Cron.Parse("5-59/5 * * * *");
-        Assert.Equal(new[] { 0 }, cron.Pattern.Seconds.Values());
-        Assert.Equal(5, cron.Pattern.Minutes.Values()[0]);
-        Assert.DoesNotContain(0, cron.Pattern.Minutes.Values());
+        Assert.Equal(new[] { 0 }, cron.Pattern.Seconds.GetValues());
+        Assert.Equal(5, cron.Pattern.Minutes.GetValues()[0]);
+        Assert.DoesNotContain(0, cron.Pattern.Minutes.GetValues());
     }
 
     [Theory]
@@ -39,11 +39,11 @@ public class ParserTests
     public void ParsesFields(string pattern)
     {
         var p = Cron.Parse(pattern).Pattern;
-        Assert.Contains(0, p.Minutes.Values());
-        Assert.Equal(new[] { 1 }, p.Hours.Values());
-        Assert.Equal(new[] { 1, 15 }, p.Days.Values());
-        Assert.Equal(new[] { 1 }, p.Months.Values());
-        Assert.Equal(new[] { 1, 2, 3, 4, 5 }, p.DaysOfWeek.Values());
+        Assert.Contains(0, p.Minutes.GetValues());
+        Assert.Equal(new[] { 1 }, p.Hours.GetValues());
+        Assert.Equal(new[] { 1, 15 }, p.DaysOfMonth.GetValues());
+        Assert.Equal(new[] { 1 }, p.Months.GetValues());
+        Assert.Equal(new[] { 1, 2, 3, 4, 5 }, p.DaysOfWeek.GetValues());
     }
 
     [Theory]
@@ -81,19 +81,19 @@ public class ParserTests
     [Fact]
     public void MonthNicknameRange()
     {
-        Assert.Equal(new[] { 2, 3 }, Cron.Parse("0 0 * FEB-MAR *").Pattern.Months.Values());
+        Assert.Equal(new[] { 2, 3 }, Cron.Parse("0 0 * FEB-MAR *").Pattern.Months.GetValues());
     }
 
     [Fact]
     public void WeekdayRangeSatSun()
     {
-        Assert.Equal(new[] { 0, 6 }, Cron.Parse("0 0 * * SAT-SUN").Pattern.DaysOfWeek.Values());
+        Assert.Equal(new[] { 0, 6 }, Cron.Parse("0 0 * * SAT-SUN").Pattern.DaysOfWeek.GetValues());
     }
 
     [Fact]
     public void SevenIsSunday()
     {
-        Assert.Equal(new[] { 0 }, Cron.Parse("* * * * 7").Pattern.DaysOfWeek.Values());
+        Assert.Equal(new[] { 0 }, Cron.Parse("* * * * 7").Pattern.DaysOfWeek.GetValues());
     }
 
     [Fact]
@@ -103,7 +103,7 @@ public class ParserTests
         Assert.Equal(CronErrorKind.InvalidPattern, Assert.Throws<CronException>(() => parser.Parse("* * * * * *")).Kind);
         var cron = parser.Parse("*/10 * * * *");
         Assert.Equal("*/10 * * * *", cron.ToString());
-        Assert.Equal(new[] { 0 }, cron.Pattern.Seconds.Values());
+        Assert.Equal(new[] { 0 }, cron.Pattern.Seconds.GetValues());
     }
 
     [Fact]
@@ -111,26 +111,26 @@ public class ParserTests
     {
         var parser = new CronParser(new CronParserOptions { Seconds = SecondsMode.Required });
         Assert.Equal(CronErrorKind.InvalidPattern, Assert.Throws<CronException>(() => parser.Parse("*/10 * * * *")).Kind);
-        Assert.Equal(60, parser.Parse("* * * * * *").Pattern.Seconds.Values().Count);
+        Assert.Equal(60, parser.Parse("* * * * * *").Pattern.Seconds.GetValues().Count);
     }
 
     [Fact]
-    public void AlternativeWeekdays()
+    public void QuartzWeekdays()
     {
-        var parser = new CronParser(new CronParserOptions { AlternativeWeekdays = true });
-        Assert.Equal(new[] { 1, 2, 3, 4, 5 }, parser.Parse("* * * * MON-FRI").Pattern.DaysOfWeek.Values());
-        Assert.Equal(new[] { 1, 2, 3, 4, 5 }, parser.Parse("* * * * 2-6").Pattern.DaysOfWeek.Values());
-        Assert.Equal(new[] { 0 }, parser.Parse("* * * * 1").Pattern.DaysOfWeek.Values());
-        Assert.Equal(CronErrorKind.ComponentError, Assert.Throws<CronException>(() => parser.Parse("* * * * 0")).Kind);
+        var parser = new CronParser(new CronParserOptions { QuartzWeekdays = true });
+        Assert.Equal(new[] { 1, 2, 3, 4, 5 }, parser.Parse("* * * * MON-FRI").Pattern.DaysOfWeek.GetValues());
+        Assert.Equal(new[] { 1, 2, 3, 4, 5 }, parser.Parse("* * * * 2-6").Pattern.DaysOfWeek.GetValues());
+        Assert.Equal(new[] { 0 }, parser.Parse("* * * * 1").Pattern.DaysOfWeek.GetValues());
+        Assert.Equal(CronErrorKind.InvalidField, Assert.Throws<CronException>(() => parser.Parse("* * * * 0")).Kind);
     }
 
     [Fact]
     public void AlternativeWeekdaysWildcardStep()
     {
-        var strict = new CronParser(new CronParserOptions { AlternativeWeekdays = true });
-        var sloppy = new CronParser(new CronParserOptions { AlternativeWeekdays = true, SloppyRanges = true });
-        Assert.Equal(new[] { 0, 2, 4, 6 }, strict.Parse("* * * * */2").Pattern.DaysOfWeek.Values());
-        Assert.Equal(new[] { 0, 2, 4, 6 }, sloppy.Parse("* * * * /2").Pattern.DaysOfWeek.Values());
+        var strict = new CronParser(new CronParserOptions { QuartzWeekdays = true });
+        var sloppy = new CronParser(new CronParserOptions { QuartzWeekdays = true, LenientSteps = true });
+        Assert.Equal(new[] { 0, 2, 4, 6 }, strict.Parse("* * * * */2").Pattern.DaysOfWeek.GetValues());
+        Assert.Equal(new[] { 0, 2, 4, 6 }, sloppy.Parse("* * * * /2").Pattern.DaysOfWeek.GetValues());
     }
 
     [Theory]
@@ -144,7 +144,7 @@ public class ParserTests
     [InlineData("* * * ? *")]
     public void QuestionMarkDisallowedElsewhere(string pattern)
     {
-        Assert.Equal(CronErrorKind.IllegalCharacters, Assert.Throws<CronException>(() => Cron.Parse(pattern)).Kind);
+        Assert.Equal(CronErrorKind.IllegalCharacter, Assert.Throws<CronException>(() => Cron.Parse(pattern)).Kind);
     }
 
     [Fact]
@@ -172,7 +172,7 @@ public class ParserTests
         parser.Parse("0 0 0 1 1 * 2025");
         parser.Parse("0 0 0 1 1 *");
         parser.Parse("0 0 1 1 *");
-        Assert.Equal(new[] { 2025 }, parser.Parse("0 0 0 1 1 * 2025").Pattern.Years.Values());
+        Assert.Equal(new[] { 2025 }, parser.Parse("0 0 0 1 1 * 2025").Pattern.Years.GetValues());
     }
 
     [Fact]
@@ -257,16 +257,16 @@ public class ParserTests
     [InlineData("* /5 * * *")]
     public void StrictStepSyntax(string pattern)
     {
-        Assert.Equal(CronErrorKind.ComponentError, Assert.Throws<CronException>(() => Cron.Parse(pattern)).Kind);
+        Assert.Equal(CronErrorKind.InvalidField, Assert.Throws<CronException>(() => Cron.Parse(pattern)).Kind);
     }
 
     [Fact]
-    public void SloppyRanges()
+    public void LenientSteps()
     {
-        var parser = new CronParser(new CronParserOptions { SloppyRanges = true });
-        Assert.Equal(new[] { 0, 10, 20, 30, 40, 50 }, parser.Parse("0/10 * * * *").Pattern.Minutes.Values());
-        Assert.Equal(new[] { 30, 40, 50 }, parser.Parse("30/10 * * * *").Pattern.Minutes.Values());
-        Assert.Equal(new[] { 0, 10, 20, 30, 40, 50 }, parser.Parse("/10 * * * *").Pattern.Minutes.Values());
+        var parser = new CronParser(new CronParserOptions { LenientSteps = true });
+        Assert.Equal(new[] { 0, 10, 20, 30, 40, 50 }, parser.Parse("0/10 * * * *").Pattern.Minutes.GetValues());
+        Assert.Equal(new[] { 30, 40, 50 }, parser.Parse("30/10 * * * *").Pattern.Minutes.GetValues());
+        Assert.Equal(new[] { 0, 10, 20, 30, 40, 50 }, parser.Parse("/10 * * * *").Pattern.Minutes.GetValues());
     }
 
     [Fact]
@@ -274,18 +274,18 @@ public class ParserTests
     {
         Assert.False(Cron.Parse("0 9-11 * * 1-5").Pattern.DaysOfWeek.HasModifiers);
         Assert.True(Cron.Parse("0 0 * * 5L").Pattern.DaysOfWeek.HasModifiers);
-        Assert.True(Cron.Parse("0 0 L * *").Pattern.Days.HasModifiers);
-        Assert.True(Cron.Parse("0 0 15W * *").Pattern.Days.HasModifiers);
-        Assert.Equal(new[] { 9, 10, 11 }, Cron.Parse("0 9-11 * * 1-5").Pattern.Hours.Values());
+        Assert.True(Cron.Parse("0 0 L * *").Pattern.DaysOfMonth.HasModifiers);
+        Assert.True(Cron.Parse("0 0 15W * *").Pattern.DaysOfMonth.HasModifiers);
+        Assert.Equal(new[] { 9, 10, 11 }, Cron.Parse("0 9-11 * * 1-5").Pattern.Hours.GetValues());
     }
 
     [Fact]
     public void PlusModifierFlags()
     {
         var p = Cron.Parse("0 12 1 * +MON").Pattern;
-        Assert.True(p.MatchesDomAndDow);
-        Assert.False(Cron.Parse("0 12 1 * MON").Pattern.MatchesDomAndDow);
-        Assert.True(Cron.Parse("0 12 1 * MON", new CronParserOptions { DomAndDow = true }).Pattern.MatchesDomAndDow);
+        Assert.True(p.RequiresBothDayFields);
+        Assert.False(Cron.Parse("0 12 1 * MON").Pattern.RequiresBothDayFields);
+        Assert.True(Cron.Parse("0 12 1 * MON", new CronParserOptions { RequireBothDayFields = true }).Pattern.RequiresBothDayFields);
     }
 
     [Fact]
@@ -294,8 +294,8 @@ public class ParserTests
         Assert.Equal(Cron.Parse("0 0 * * MON-FRI"), Cron.Parse("0 0 * * 1-5"));
         Assert.Equal(Cron.Parse("0 0 * * MON-FRI").GetHashCode(), Cron.Parse("0 0 * * 1-5").GetHashCode());
         Assert.NotEqual(Cron.Parse("0 0 * * MON"), Cron.Parse("0 0 * * TUE"));
-        Assert.Equal(Cron.Parse("0 0 * * MON"), Cron.Parse("0 0 * * MON", new CronParserOptions { AlternativeWeekdays = true }));
-        Assert.Equal(Cron.Parse("*/5 * * * *"), Cron.Parse("*/5 * * * *", new CronParserOptions { SloppyRanges = true }));
+        Assert.Equal(Cron.Parse("0 0 * * MON"), Cron.Parse("0 0 * * MON", new CronParserOptions { QuartzWeekdays = true }));
+        Assert.Equal(Cron.Parse("*/5 * * * *"), Cron.Parse("*/5 * * * *", new CronParserOptions { LenientSteps = true }));
     }
 
     [Theory]
@@ -305,7 +305,7 @@ public class ParserTests
     [InlineData("JAN 0 * * *")]
     public void NamesOnlyInTheirOwnField(string pattern)
     {
-        Assert.Equal(CronErrorKind.IllegalCharacters, Assert.Throws<CronException>(() => Cron.Parse(pattern)).Kind);
+        Assert.Equal(CronErrorKind.IllegalCharacter, Assert.Throws<CronException>(() => Cron.Parse(pattern)).Kind);
     }
 
     [Fact]
@@ -325,5 +325,23 @@ public class ParserTests
         Assert.Equal(JobType.IntervalWildcard, Cron.Parse("*/5 * * * *").JobType);
         Assert.Equal(JobType.IntervalWildcard, Cron.Parse("0 0,12 * * *").JobType);
         Assert.Equal(JobType.IntervalWildcard, Cron.Parse("0 * * * *").JobType);
+    }
+
+    [Fact]
+    public void LastAloneInDayOfWeekIsInvalid()
+    {
+        Assert.Equal(CronErrorKind.InvalidField, Assert.Throws<CronException>(() => Cron.Parse("0 0 * * L")).Kind);
+        Assert.NotNull(Cron.Parse("0 0 * * 5L"));
+        Assert.NotNull(Cron.Parse("0 0 L * *"));
+    }
+
+    [Fact]
+    public void ImplementsIParsable()
+    {
+        static T ParseGeneric<T>(string s) where T : IParsable<T> => T.Parse(s, null);
+        static bool TryParseGeneric<T>(string? s, out T? value) where T : IParsable<T> => T.TryParse(s, null, out value);
+
+        Assert.Equal(Cron.Parse("@daily"), ParseGeneric<Cron>("@daily"));
+        Assert.False(TryParseGeneric<Cron>("nope", out _));
     }
 }

@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 namespace Croner.Describing;
 
 /// <summary>Swedish phrases for pattern descriptions.</summary>
@@ -9,17 +11,17 @@ public sealed class Swedish : ICronLanguage
     /// <inheritdoc />
     public string EveryMinute => "Varje minut";
     /// <inheritdoc />
-    public string EverySecondPhrase => "Varje sekund";
+    public string EverySecond => "Varje sekund";
     /// <inheritdoc />
-    public string EveryXMinutes(int step) => $"var {step}:e minut";
+    public string EveryXMinutes(int interval) => $"var {interval}:e minut";
     /// <inheritdoc />
-    public string EveryXSeconds(int step) => $"var {step}:e sekund";
+    public string EveryXSeconds(int interval) => $"var {interval}:e sekund";
     /// <inheritdoc />
-    public string EveryXHours(int step) => $"var {step}:e timme";
+    public string EveryXHours(int interval) => $"var {interval}:e timme";
     /// <inheritdoc />
     public string AtTime(string time) => $"Klockan {time}";
     /// <inheritdoc />
-    public string AtTimeAndEveryXSeconds(string time, int step) => $"Klockan {time}, var {step}:e sekund";
+    public string AtTimeAndEveryXSeconds(string time, int interval) => $"Klockan {time}, var {interval}:e sekund";
     /// <inheritdoc />
     public string AtTimeAtSecond(string time, string second) => $"Klockan {time}, på sekund {second}";
     /// <inheritdoc />
@@ -63,31 +65,31 @@ public sealed class Swedish : ICronLanguage
     }
 
     /// <inheritdoc />
-    public string DomAndDowIfAlso(string dow) => $"(om det också är {dow})";
+    public string IfAlsoDayOfWeek(string dow) => $"(om det också är {dow})";
     /// <inheritdoc />
-    public string DomAndDowIfAlsoOneOf(string dow) => $"(om det också är en av: {dow})";
+    public string IfAlsoOneOfDaysOfWeek(string dow) => $"(om det också är en av: {dow})";
     /// <inheritdoc />
     public string ListConjunctionAnd => "och";
     /// <inheritdoc />
     public string ListConjunctionOr => "eller";
 
     /// <inheritdoc />
-    public string[] DayOfWeekNames { get; } =
-        { "söndag", "måndag", "tisdag", "onsdag", "torsdag", "fredag", "lördag" };
+    public IReadOnlyList<string> DayOfWeekNames { get; } =
+        ["söndag", "måndag", "tisdag", "onsdag", "torsdag", "fredag", "lördag"];
 
     /// <inheritdoc />
-    public string[] MonthNames { get; } =
-    {
+    public IReadOnlyList<string> MonthNames { get; } =
+    [
         "januari", "februari", "mars", "april", "maj", "juni",
         "juli", "augusti", "september", "oktober", "november", "december",
-    };
+    ];
 
     /// <inheritdoc />
     public string EveryPastPhrase(string every, string hours) => $"{every} under {hours}";
     /// <inheritdoc />
     public string PastHourPhrase(string s) => $"timme {s}";
     /// <inheritdoc />
-    public string EveryXMonths(int step) => $"var {step}:e månad";
+    public string EveryXMonths(int interval) => $"var {interval}:e månad";
     /// <inheritdoc />
-    public string EveryXYears(int step) => $"var {step}:e år";
+    public string EveryXYears(int interval) => $"var {interval}:e år";
 }

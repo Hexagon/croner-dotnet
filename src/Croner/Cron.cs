@@ -5,12 +5,9 @@ using System.Diagnostics.CodeAnalysis;
 namespace Croner;
 
 /// <summary>The direction of a time search.</summary>
-public enum Direction
+internal enum Direction
 {
-    /// <summary>Towards the future.</summary>
     Forward,
-
-    /// <summary>Towards the past.</summary>
     Backward,
 }
 
@@ -35,24 +32,25 @@ public enum JobType
 }
 
 /// <summary>
-/// A parsed cron schedule. Use it to check whether a time matches, find next and previous
+/// A parsed cron schedule. Use it to check whether a time matches, get next and previous
 /// occurrences, enumerate occurrences, and describe the schedule in plain language.
+/// Instances are immutable and thread-safe.
 /// </summary>
 /// <example>
 /// <code>
 /// var cron = Cron.Parse("0 0 * * FRI");
-/// DateTimeOffset next = cron.FindNextOccurrence(DateTimeOffset.Now, TimeZoneInfo.Local);
+/// DateTimeOffset next = cron.GetNextOccurrence(DateTimeOffset.UtcNow, TimeZoneInfo.Local);
 /// </code>
 /// </example>
-public sealed class Cron : IEquatable<Cron>
+public sealed class Cron : IEquatable<Cron>, IParsable<Cron>
 {
     /// <summary>
     /// The latest year a search reaches. Prevents endless searches for patterns that never match.
     /// </summary>
-    public const int YearUpperLimit = 5000;
+    public const int MaxYear = 5000;
 
     /// <summary>The earliest year a search reaches (1 AD).</summary>
-    public const int YearLowerLimit = 1;
+    public const int MinYear = 1;
 
     private const int MaxSearchIterations = 366 * 24 * 60 * 60;
     private const int MaxGapSearchSeconds = 3600 * 2;
@@ -70,7 +68,12 @@ public sealed class Cron : IEquatable<Cron>
     /// <summary>Whether the pattern is a fixed-time or an interval/wildcard job. See <see cref="Croner.JobType"/>.</summary>
     public JobType JobType { get; }
 
+    // ------------------------------------------------------------------
+    // Parsing
+    // ------------------------------------------------------------------
+
     /// <summary>Parses a cron pattern with the given options, or the defaults.</summary>
+    /// <exception cref="ArgumentNullException"><paramref name="pattern"/> is <c>null</c>.</exception>
     /// <exception cref="CronException">The pattern is invalid.</exception>
     public static Cron Parse(string pattern, CronParserOptions? options = null) =>
         new CronParser(options).Parse(pattern);
@@ -83,6 +86,13 @@ public sealed class Cron : IEquatable<Cron>
     public static bool TryParse([NotNullWhen(true)] string? pattern, CronParserOptions? options, [NotNullWhen(true)] out Cron? cron) =>
         new CronParser(options).TryParse(pattern, out cron);
 
+    /// <inheritdoc />
+    static Cron IParsable<Cron>.Parse(string s, IFormatProvider? provider) => Parse(s);
+
+    /// <inheritdoc />
+    static bool IParsable<Cron>.TryParse([NotNullWhen(true)] string? s, IFormatProvider? provider, [MaybeNullWhen(false)] out Cron result) =>
+        TryParse(s, out result);
+
     // ------------------------------------------------------------------
     // Matching
     // ------------------------------------------------------------------
@@ -91,19 +101,22 @@ public sealed class Cron : IEquatable<Cron>
     /// Checks whether the wall clock time of <paramref name="time"/> (in its own offset) matches the pattern.
     /// Sub-second precision is ignored.
     /// </summary>
-    public bool IsTimeMatching(DateTimeOffset time) => IsCivilMatching(Truncate(time.DateTime));
+    public bool IsMatch(DateTimeOffset time) => IsCivilMatching(Truncate(time.DateTime));
 
     /// <summary>
     /// Checks whether <paramref name="time"/>, as wall clock time in <paramref name="zone"/>, matches the pattern.
     /// </summary>
-    public bool IsTimeMatching(DateTimeOffset time, TimeZoneInfo zone) =>
-        IsCivilMatching(Truncate(TimeZoneInfo.ConvertTime(time, zone).DateTime));
+    public bool IsMatch(DateTimeOffset time, TimeZoneInfo zone)
+    {
+        ArgumentNullException.ThrowIfNull(zone);
+        return IsCivilMatching(Truncate(TimeZoneInfo.ConvertTime(time, zone).DateTime));
+    }
 
     /// <summary>
     /// Checks whether the wall clock fields of <paramref name="time"/> match the pattern,
     /// regardless of its <see cref="DateTime.Kind"/>.
     /// </summary>
-    public bool IsTimeMatching(DateTime time) => IsCivilMatching(Truncate(time));
+    public bool IsMatch(DateTime time) => IsCivilMatching(Truncate(time));
 
     private bool IsCivilMatching(DateTime c) =>
         Pattern.SecondMatch(c.Second)
@@ -118,67 +131,94 @@ public sealed class Cron : IEquatable<Cron>
     // ------------------------------------------------------------------
 
     /// <summary>
-    /// Finds the next occurrence after <paramref name="start"/>, evaluated in the fixed UTC offset of <paramref name="start"/>.
-    /// </summary>
-    /// <param name="start">Where to start searching.</param>
-    /// <param name="inclusive">Whether <paramref name="start"/> itself (truncated to the second) may be returned.</param>
-    /// <exception cref="CronException">No occurrence exists within the search limits.</exception>
-    public DateTimeOffset FindNextOccurrence(DateTimeOffset start, bool inclusive = false) =>
-        FindOccurrence(start, Zone.Fixed(start.Offset), inclusive, Direction.Forward);
-
-    /// <summary>
-    /// Finds the next occurrence after <paramref name="start"/>, evaluated as wall clock time in
+    /// Gets the next occurrence after <paramref name="from"/>, evaluated as wall clock time in
     /// <paramref name="zone"/>, with correct handling of daylight saving time transitions.
     /// The result carries the zone's UTC offset at that instant.
     /// </summary>
+    /// <param name="from">Where to start searching.</param>
+    /// <param name="zone">The time zone the pattern is evaluated in.</param>
+    /// <param name="inclusive">Whether <paramref name="from"/> itself (truncated to the second) may be returned.</param>
     /// <exception cref="CronException">No occurrence exists within the search limits.</exception>
-    public DateTimeOffset FindNextOccurrence(DateTimeOffset start, TimeZoneInfo zone, bool inclusive = false) =>
-        FindOccurrence(start, Zone.Of(zone), inclusive, Direction.Forward);
+    public DateTimeOffset GetNextOccurrence(DateTimeOffset from, TimeZoneInfo zone, bool inclusive = false) =>
+        FindOccurrence(from, Zone.Of(zone), inclusive, Direction.Forward);
 
     /// <summary>
-    /// Finds the next occurrence after <paramref name="start"/>. A <see cref="DateTimeKind.Utc"/> value is evaluated in UTC,
+    /// Gets the next occurrence after <paramref name="from"/>, evaluated in the fixed UTC offset of <paramref name="from"/>.
+    /// </summary>
+    /// <param name="from">Where to start searching.</param>
+    /// <param name="inclusive">Whether <paramref name="from"/> itself (truncated to the second) may be returned.</param>
+    /// <exception cref="CronException">No occurrence exists within the search limits.</exception>
+    public DateTimeOffset GetNextOccurrence(DateTimeOffset from, bool inclusive = false) =>
+        FindOccurrence(from, Zone.Fixed(from.Offset), inclusive, Direction.Forward);
+
+    /// <summary>
+    /// Gets the next occurrence after <paramref name="from"/>. A <see cref="DateTimeKind.Utc"/> value is evaluated in UTC,
     /// a <see cref="DateTimeKind.Local"/> value in <see cref="TimeZoneInfo.Local"/>, and an
     /// <see cref="DateTimeKind.Unspecified"/> value as a plain wall clock without time zone. The result has the same kind.
     /// </summary>
     /// <exception cref="CronException">No occurrence exists within the search limits.</exception>
-    public DateTime FindNextOccurrence(DateTime start, bool inclusive = false) =>
-        FromKind(FindOccurrence(ToOffset(start, out Zone zone), zone, inclusive, Direction.Forward), start.Kind);
+    public DateTime GetNextOccurrence(DateTime from, bool inclusive = false) =>
+        FromKind(FindOccurrence(ToOffset(from, out Zone zone), zone, inclusive, Direction.Forward), from.Kind);
 
     /// <summary>
-    /// Finds the previous occurrence before <paramref name="start"/>, evaluated in the fixed UTC offset of <paramref name="start"/>.
+    /// Gets the previous occurrence before <paramref name="from"/>, evaluated as wall clock time in <paramref name="zone"/>.
     /// </summary>
     /// <exception cref="CronException">No occurrence exists within the search limits.</exception>
-    public DateTimeOffset FindPreviousOccurrence(DateTimeOffset start, bool inclusive = false) =>
-        FindOccurrence(start, Zone.Fixed(start.Offset), inclusive, Direction.Backward);
+    public DateTimeOffset GetPreviousOccurrence(DateTimeOffset from, TimeZoneInfo zone, bool inclusive = false) =>
+        FindOccurrence(from, Zone.Of(zone), inclusive, Direction.Backward);
 
     /// <summary>
-    /// Finds the previous occurrence before <paramref name="start"/>, evaluated as wall clock time in <paramref name="zone"/>.
+    /// Gets the previous occurrence before <paramref name="from"/>, evaluated in the fixed UTC offset of <paramref name="from"/>.
     /// </summary>
     /// <exception cref="CronException">No occurrence exists within the search limits.</exception>
-    public DateTimeOffset FindPreviousOccurrence(DateTimeOffset start, TimeZoneInfo zone, bool inclusive = false) =>
-        FindOccurrence(start, Zone.Of(zone), inclusive, Direction.Backward);
+    public DateTimeOffset GetPreviousOccurrence(DateTimeOffset from, bool inclusive = false) =>
+        FindOccurrence(from, Zone.Fixed(from.Offset), inclusive, Direction.Backward);
 
     /// <summary>
-    /// Finds the previous occurrence before <paramref name="start"/>. See <see cref="FindNextOccurrence(DateTime, bool)"/>
+    /// Gets the previous occurrence before <paramref name="from"/>. See <see cref="GetNextOccurrence(DateTime, bool)"/>
     /// for how the <see cref="DateTime.Kind"/> is interpreted.
     /// </summary>
     /// <exception cref="CronException">No occurrence exists within the search limits.</exception>
-    public DateTime FindPreviousOccurrence(DateTime start, bool inclusive = false) =>
-        FromKind(FindOccurrence(ToOffset(start, out Zone zone), zone, inclusive, Direction.Backward), start.Kind);
+    public DateTime GetPreviousOccurrence(DateTime from, bool inclusive = false) =>
+        FromKind(FindOccurrence(ToOffset(from, out Zone zone), zone, inclusive, Direction.Backward), from.Kind);
 
     /// <summary>
-    /// Tries to find the next (or previous) occurrence. Returns <c>false</c> when none exists within the search limits.
+    /// Tries to get the next occurrence after <paramref name="from"/>. Returns <c>false</c> when none exists within the search limits.
     /// </summary>
-    /// <param name="start">Where to start searching.</param>
-    /// <param name="zone">The time zone to evaluate in, or <c>null</c> for the fixed offset of <paramref name="start"/>.</param>
-    /// <param name="inclusive">Whether <paramref name="start"/> itself may be returned.</param>
-    /// <param name="direction">Search direction.</param>
+    /// <param name="from">Where to start searching.</param>
+    /// <param name="zone">The time zone to evaluate in, or <c>null</c> for the fixed offset of <paramref name="from"/>.</param>
     /// <param name="result">The occurrence found.</param>
-    public bool TryFindOccurrence(DateTimeOffset start, TimeZoneInfo? zone, bool inclusive, Direction direction, out DateTimeOffset result)
+    public bool TryGetNextOccurrence(DateTimeOffset from, TimeZoneInfo? zone, out DateTimeOffset result) =>
+        TryFind(from, zone, false, Direction.Forward, out result);
+
+    /// <summary>
+    /// Tries to get the next occurrence at or after <paramref name="from"/> (with <paramref name="inclusive"/>) or after it.
+    /// Returns <c>false</c> when none exists within the search limits.
+    /// </summary>
+    public bool TryGetNextOccurrence(DateTimeOffset from, TimeZoneInfo? zone, bool inclusive, out DateTimeOffset result) =>
+        TryFind(from, zone, inclusive, Direction.Forward, out result);
+
+    /// <summary>
+    /// Tries to get the previous occurrence before <paramref name="from"/>. Returns <c>false</c> when none exists within the search limits.
+    /// </summary>
+    /// <param name="from">Where to start searching.</param>
+    /// <param name="zone">The time zone to evaluate in, or <c>null</c> for the fixed offset of <paramref name="from"/>.</param>
+    /// <param name="result">The occurrence found.</param>
+    public bool TryGetPreviousOccurrence(DateTimeOffset from, TimeZoneInfo? zone, out DateTimeOffset result) =>
+        TryFind(from, zone, false, Direction.Backward, out result);
+
+    /// <summary>
+    /// Tries to get the previous occurrence at or before <paramref name="from"/> (with <paramref name="inclusive"/>) or before it.
+    /// Returns <c>false</c> when none exists within the search limits.
+    /// </summary>
+    public bool TryGetPreviousOccurrence(DateTimeOffset from, TimeZoneInfo? zone, bool inclusive, out DateTimeOffset result) =>
+        TryFind(from, zone, inclusive, Direction.Backward, out result);
+
+    private bool TryFind(DateTimeOffset from, TimeZoneInfo? zone, bool inclusive, Direction direction, out DateTimeOffset result)
     {
         try
         {
-            result = FindOccurrence(start, zone is null ? Zone.Fixed(start.Offset) : Zone.Of(zone), inclusive, direction);
+            result = FindOccurrence(from, ZoneFor(from, zone), inclusive, direction);
             return true;
         }
         catch (CronException)
@@ -189,37 +229,53 @@ public sealed class Cron : IEquatable<Cron>
     }
 
     // ------------------------------------------------------------------
-    // Iteration
+    // Enumeration
     // ------------------------------------------------------------------
 
     /// <summary>
-    /// Enumerates occurrences after <paramref name="start"/> (exclusive), towards the future.
+    /// Lazily enumerates occurrences after <paramref name="from"/>, towards the future.
+    /// The sequence ends when the search limit is reached.
     /// </summary>
-    /// <param name="start">Where to start.</param>
-    /// <param name="zone">The time zone to evaluate in, or <c>null</c> for the fixed offset of <paramref name="start"/>.</param>
-    public IEnumerable<DateTimeOffset> IterAfter(DateTimeOffset start, TimeZoneInfo? zone = null) =>
-        Iterate(start, ZoneFor(start, zone), inclusive: false, Direction.Forward);
+    /// <param name="from">Where to start.</param>
+    /// <param name="zone">The time zone to evaluate in, or <c>null</c> for the fixed offset of <paramref name="from"/>.</param>
+    /// <param name="inclusive">Whether <paramref name="from"/> itself may be the first occurrence.</param>
+    public IEnumerable<DateTimeOffset> GetNextOccurrences(DateTimeOffset from, TimeZoneInfo? zone = null, bool inclusive = false) =>
+        Iterate(from, ZoneFor(from, zone), inclusive, Direction.Forward);
 
     /// <summary>
-    /// Enumerates occurrences before <paramref name="start"/> (exclusive), towards the past.
+    /// Lazily enumerates occurrences before <paramref name="from"/>, towards the past, most recent first.
     /// </summary>
-    public IEnumerable<DateTimeOffset> IterBefore(DateTimeOffset start, TimeZoneInfo? zone = null) =>
-        Iterate(start, ZoneFor(start, zone), inclusive: false, Direction.Backward);
+    /// <param name="from">Where to start.</param>
+    /// <param name="zone">The time zone to evaluate in, or <c>null</c> for the fixed offset of <paramref name="from"/>.</param>
+    /// <param name="inclusive">Whether <paramref name="from"/> itself may be the first occurrence.</param>
+    public IEnumerable<DateTimeOffset> GetPreviousOccurrences(DateTimeOffset from, TimeZoneInfo? zone = null, bool inclusive = false) =>
+        Iterate(from, ZoneFor(from, zone), inclusive, Direction.Backward);
+
+    /// <summary>Lazily enumerates occurrences after <paramref name="from"/>. See <see cref="GetNextOccurrence(DateTime, bool)"/> for kind handling.</summary>
+    public IEnumerable<DateTime> GetNextOccurrences(DateTime from, bool inclusive = false) =>
+        IterateKind(from, inclusive, Direction.Forward);
+
+    /// <summary>Lazily enumerates occurrences before <paramref name="from"/>, most recent first. See <see cref="GetNextOccurrence(DateTime, bool)"/> for kind handling.</summary>
+    public IEnumerable<DateTime> GetPreviousOccurrences(DateTime from, bool inclusive = false) =>
+        IterateKind(from, inclusive, Direction.Backward);
 
     /// <summary>
-    /// Enumerates occurrences from <paramref name="start"/> (inclusive) in the given direction.
+    /// Lazily enumerates the occurrences from <paramref name="from"/> (inclusive) up to <paramref name="to"/> (exclusive).
     /// </summary>
-    public IEnumerable<DateTimeOffset> IterFrom(DateTimeOffset start, Direction direction, TimeZoneInfo? zone = null) =>
-        Iterate(start, ZoneFor(start, zone), inclusive: true, direction);
-
-    /// <summary>Enumerates occurrences after <paramref name="start"/> (exclusive). See <see cref="FindNextOccurrence(DateTime, bool)"/> for kind handling.</summary>
-    public IEnumerable<DateTime> IterAfter(DateTime start) => IterateKind(start, false, Direction.Forward);
-
-    /// <summary>Enumerates occurrences before <paramref name="start"/> (exclusive). See <see cref="FindNextOccurrence(DateTime, bool)"/> for kind handling.</summary>
-    public IEnumerable<DateTime> IterBefore(DateTime start) => IterateKind(start, false, Direction.Backward);
-
-    /// <summary>Enumerates occurrences from <paramref name="start"/> (inclusive). See <see cref="FindNextOccurrence(DateTime, bool)"/> for kind handling.</summary>
-    public IEnumerable<DateTime> IterFrom(DateTime start, Direction direction) => IterateKind(start, true, direction);
+    /// <param name="from">The start of the range, inclusive.</param>
+    /// <param name="to">The end of the range, exclusive.</param>
+    /// <param name="zone">The time zone to evaluate in, or <c>null</c> for the fixed offset of <paramref name="from"/>.</param>
+    public IEnumerable<DateTimeOffset> GetOccurrences(DateTimeOffset from, DateTimeOffset to, TimeZoneInfo? zone = null)
+    {
+        foreach (DateTimeOffset occurrence in GetNextOccurrences(from, zone, inclusive: true))
+        {
+            if (occurrence >= to)
+            {
+                yield break;
+            }
+            yield return occurrence;
+        }
+    }
 
     private IEnumerable<DateTime> IterateKind(DateTime start, bool inclusive, Direction direction)
     {
@@ -349,7 +405,7 @@ public sealed class Cron : IEquatable<Cron>
 
         if (IsInside(MaxOverlapSeconds))
         {
-            throw new CronException(CronErrorKind.TimeSearchLimitExceeded);
+            throw new CronException(CronErrorKind.SearchLimitExceeded);
         }
         long inside = 0, outside = MaxOverlapSeconds;
         while (outside - inside > 1)
@@ -418,7 +474,7 @@ public sealed class Cron : IEquatable<Cron>
         {
             if (++iterations > MaxSearchIterations)
             {
-                throw new CronException(CronErrorKind.TimeSearchLimitExceeded);
+                throw new CronException(CronErrorKind.SearchLimitExceeded);
             }
 
             bool changed = FindMatchingDateComponent(ref cursor, direction, DateComponent.Year);
@@ -507,7 +563,7 @@ public sealed class Cron : IEquatable<Cron>
                             afterGap = AddCivilSeconds(afterGap, 1);
                             if (++gapAdjust > MaxGapSearchSeconds)
                             {
-                                throw new CronException(CronErrorKind.TimeSearchLimitExceeded);
+                                throw new CronException(CronErrorKind.SearchLimitExceeded);
                             }
                             Resolution r = zone.Resolve(afterGap);
                             if (r.Kind != ResolutionKind.Gap)
@@ -540,7 +596,7 @@ public sealed class Cron : IEquatable<Cron>
                                 beforeGap = AddCivilSeconds(beforeGap, -1);
                                 if (++gapAdjust > MaxGapSearchSeconds)
                                 {
-                                    throw new CronException(CronErrorKind.TimeSearchLimitExceeded);
+                                    throw new CronException(CronErrorKind.SearchLimitExceeded);
                                 }
                                 if (zone.Resolve(beforeGap).Kind != ResolutionKind.Gap)
                                 {
@@ -583,7 +639,7 @@ public sealed class Cron : IEquatable<Cron>
         if (ticks < DateTime.MinValue.Ticks || ticks > DateTime.MaxValue.Ticks)
         {
             // Walking off the calendar means there is nothing more to find.
-            throw new CronException(CronErrorKind.TimeSearchLimitExceeded);
+            throw new CronException(CronErrorKind.SearchLimitExceeded);
         }
         return new DateTime(ticks, DateTimeKind.Unspecified);
     }
@@ -611,9 +667,9 @@ public sealed class Cron : IEquatable<Cron>
 
     private static void CheckYearLimits(DateTime cursor, Direction direction)
     {
-        if (direction == Direction.Forward ? cursor.Year >= YearUpperLimit : cursor.Year <= YearLowerLimit)
+        if (direction == Direction.Forward ? cursor.Year >= MaxYear : cursor.Year <= MinYear)
         {
-            throw new CronException(CronErrorKind.TimeSearchLimitExceeded);
+            throw new CronException(CronErrorKind.SearchLimitExceeded);
         }
     }
 

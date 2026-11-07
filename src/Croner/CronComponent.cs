@@ -43,7 +43,7 @@ public sealed class CronComponent : IEquatable<CronComponent>
     private readonly byte _features;
     private byte _enabledFeatures;
     private readonly ushort _inputOffset;
-    private bool _sloppyRanges;
+    private bool _lenientSteps;
 
     internal CronComponent(ushort min, ushort max, byte features, ushort inputOffset)
     {
@@ -67,7 +67,7 @@ public sealed class CronComponent : IEquatable<CronComponent>
     /// <summary>Whether the field was written as, or stepped from, a wildcard (<c>*</c>).</summary>
     public bool FromWildcard { get; private set; }
 
-    internal void SetSloppyRanges(bool sloppy) => _sloppyRanges = sloppy;
+    internal void SetLenientSteps(bool lenient) => _lenientSteps = lenient;
 
     internal void SetBit(ushort pos, byte bit)
     {
@@ -87,24 +87,24 @@ public sealed class CronComponent : IEquatable<CronComponent>
         {
             if (pos < _inputOffset)
             {
-                throw new CronException(CronErrorKind.ComponentError,
+                throw new CronException(CronErrorKind.InvalidField,
                     $"Position {pos} is less than the input offset {_inputOffset}.");
             }
             pos -= _inputOffset;
         }
         if (pos < Min || pos > Max)
         {
-            throw new CronException(CronErrorKind.ComponentError,
+            throw new CronException(CronErrorKind.InvalidField,
                 $"Position {pos} is out of bounds for the current range ({Min}-{Max}).");
         }
         if ((_features & bit) != bit)
         {
-            throw new CronException(CronErrorKind.ComponentError,
+            throw new CronException(CronErrorKind.InvalidField,
                 $"Bit 0b{Convert.ToString(bit, 2).PadLeft(8, '0')} is not supported by the current features 0b{Convert.ToString(_features, 2).PadLeft(8, '0')}.");
         }
         if (pos >= _bitfields.Length)
         {
-            throw new CronException(CronErrorKind.ComponentError,
+            throw new CronException(CronErrorKind.InvalidField,
                 $"Position {pos} is out of the bitfields vector's bounds.");
         }
         return pos;
@@ -118,12 +118,12 @@ public sealed class CronComponent : IEquatable<CronComponent>
     {
         if (pos < Min || pos > Max)
         {
-            throw new CronException(CronErrorKind.ComponentError,
+            throw new CronException(CronErrorKind.InvalidField,
                 $"Position {pos} is out of bounds for the current range ({Min}-{Max}).");
         }
         if ((_features & bit) != bit)
         {
-            throw new CronException(CronErrorKind.ComponentError,
+            throw new CronException(CronErrorKind.InvalidField,
                 $"Bit 0b{Convert.ToString(bit, 2).PadLeft(8, '0')} is not supported by the current features 0b{Convert.ToString(_features, 2).PadLeft(8, '0')}.");
         }
         return pos < _bitfields.Length && (_bitfields[pos] & bit) != 0;
@@ -136,7 +136,7 @@ public sealed class CronComponent : IEquatable<CronComponent>
     {
         if (!IsFeatureAllowed(feature))
         {
-            throw new CronException(CronErrorKind.ComponentError,
+            throw new CronException(CronErrorKind.InvalidField,
                 $"Feature 0b{Convert.ToString(feature, 2).PadLeft(8, '0')} is not supported by the current features 0b{Convert.ToString(_features, 2).PadLeft(8, '0')}.");
         }
         _enabledFeatures |= feature;
@@ -154,7 +154,7 @@ public sealed class CronComponent : IEquatable<CronComponent>
     /// through <c>L</c>, <c>W</c> or <c>#</c> are not included; <see cref="HasModifiers"/> reports those.
     /// Weekdays use <c>0</c> for Sunday, whichever weekday numbering the pattern was parsed with.
     /// </remarks>
-    public IReadOnlyList<int> Values() => GetSetValues(CronBits.All);
+    public IReadOnlyList<int> GetValues() => GetSetValues(CronBits.All);
 
     /// <summary>Whether the field uses <c>L</c>, <c>W</c> or <c>#</c>, whose matches depend on the month.</summary>
     public bool HasModifiers =>
@@ -212,6 +212,12 @@ public sealed class CronComponent : IEquatable<CronComponent>
             }
             else if (string.Equals(parsedPart, "L", StringComparison.OrdinalIgnoreCase))
             {
+                if (IsFeatureAllowed(CronBits.NthAll))
+                {
+                    // In the day-of-week field, L only means something together with a weekday.
+                    throw new CronException(CronErrorKind.InvalidField,
+                        "L in the day-of-week field needs a weekday, as in 5L for the last Friday of the month.");
+                }
                 EnableFeature(CronBits.Last);
             }
             else
@@ -224,13 +230,13 @@ public sealed class CronComponent : IEquatable<CronComponent>
 
                 if (parsedPart.Contains('#') && !IsFeatureAllowed(CronBits.NthAll))
                 {
-                    throw new CronException(CronErrorKind.ComponentError,
+                    throw new CronException(CronErrorKind.InvalidField,
                         "Nth specifier # not allowed in the current field.");
                 }
 
                 if (parsedPart.Contains('L') && !IsFeatureAllowed(CronBits.NthAll))
                 {
-                    throw new CronException(CronErrorKind.ComponentError, "L not allowed in the current field.");
+                    throw new CronException(CronErrorKind.InvalidField, "L not allowed in the current field.");
                 }
 
                 HandleNumber(parsedPart);
@@ -245,7 +251,7 @@ public sealed class CronComponent : IEquatable<CronComponent>
     {
         if (!TryParseUShort(s, out ushort value))
         {
-            throw new CronException(CronErrorKind.ComponentError, error);
+            throw new CronException(CronErrorKind.InvalidField, error);
         }
         return value;
     }
@@ -263,11 +269,11 @@ public sealed class CronComponent : IEquatable<CronComponent>
         }
         if (!byte.TryParse(value.AsSpan(nthPos + 1), NumberStyles.None, CultureInfo.InvariantCulture, out byte nth))
         {
-            throw new CronException(CronErrorKind.ComponentError, "Invalid nth specifier.");
+            throw new CronException(CronErrorKind.InvalidField, "Invalid nth specifier.");
         }
         if (nth == 0 || nth > 5)
         {
-            throw new CronException(CronErrorKind.ComponentError, "Nth specifier out of bounds.");
+            throw new CronException(CronErrorKind.InvalidField, "Nth specifier out of bounds.");
         }
         return CronBits.NthBits[nth - 1];
     }
@@ -299,7 +305,7 @@ public sealed class CronComponent : IEquatable<CronComponent>
         ushort day = ParseUShort(dayStr, "Invalid day for closest weekday.");
         if (day < Min || day > Max)
         {
-            throw new CronException(CronErrorKind.ComponentError, "Day for closest weekday out of bounds.");
+            throw new CronException(CronErrorKind.InvalidField, "Day for closest weekday out of bounds.");
         }
         SetBit(day, CronBits.ClosestWeekday);
     }
@@ -312,7 +318,7 @@ public sealed class CronComponent : IEquatable<CronComponent>
         string[] parts = clean.Split('-');
         if (parts.Length != 2)
         {
-            throw new CronException(CronErrorKind.ComponentError, "Invalid range syntax.");
+            throw new CronException(CronErrorKind.InvalidField, "Invalid range syntax.");
         }
 
         ushort start = ParseUShort(parts[0].Trim(), "Invalid start of range.");
@@ -320,7 +326,7 @@ public sealed class CronComponent : IEquatable<CronComponent>
 
         if (start > end || start < Min || end > Max)
         {
-            throw new CronException(CronErrorKind.ComponentError, "Range out of bounds.");
+            throw new CronException(CronErrorKind.InvalidField, "Range out of bounds.");
         }
 
         for (int value = start; value <= end; value++)
@@ -336,7 +342,7 @@ public sealed class CronComponent : IEquatable<CronComponent>
         ushort num = ParseUShort(clean, "Invalid number.");
         if (num < Min || num > Max)
         {
-            throw new CronException(CronErrorKind.ComponentError, "Number out of bounds.");
+            throw new CronException(CronErrorKind.InvalidField, "Number out of bounds.");
         }
         SetBit(num, bitToSet);
     }
@@ -349,7 +355,7 @@ public sealed class CronComponent : IEquatable<CronComponent>
         string[] parts = clean.Split('/');
         if (parts.Length != 2)
         {
-            throw new CronException(CronErrorKind.ComponentError, "Invalid stepped range syntax.");
+            throw new CronException(CronErrorKind.InvalidField, "Invalid stepped range syntax.");
         }
 
         string rangePart = parts[0];
@@ -360,7 +366,7 @@ public sealed class CronComponent : IEquatable<CronComponent>
 
         if (step == 0)
         {
-            throw new CronException(CronErrorKind.ComponentError, "Step cannot be zero.");
+            throw new CronException(CronErrorKind.InvalidField, "Step cannot be zero.");
         }
 
         int start, end;
@@ -375,14 +381,14 @@ public sealed class CronComponent : IEquatable<CronComponent>
             string[] bounds = rangePart.Split('-');
             if (bounds.Length != 2)
             {
-                throw new CronException(CronErrorKind.ComponentError, "Invalid range syntax in stepping.");
+                throw new CronException(CronErrorKind.InvalidField, "Invalid range syntax in stepping.");
             }
             start = ParseUShort(bounds[0], "Invalid range start.");
             end = ParseUShort(bounds[1], "Invalid range end.");
         }
         else if (rangePart.Length == 0)
         {
-            if (_sloppyRanges)
+            if (_lenientSteps)
             {
                 // In sloppy mode, treat /10 as */10
                 FromWildcard = true;
@@ -391,11 +397,11 @@ public sealed class CronComponent : IEquatable<CronComponent>
             }
             else
             {
-                throw new CronException(CronErrorKind.ComponentError,
+                throw new CronException(CronErrorKind.InvalidField,
                     $"Invalid step syntax: omitting the starting point like \"/{stepStr}\" is not allowed. Use \"*/{stepStr}\" for wildcard steps or \"X-Y/{stepStr}\" for range steps.");
             }
         }
-        else if (_sloppyRanges)
+        else if (_lenientSteps)
         {
             // In sloppy mode, allow a single number as the starting point
             start = ParseUShort(rangePart, "Invalid start.");
@@ -403,13 +409,13 @@ public sealed class CronComponent : IEquatable<CronComponent>
         }
         else
         {
-            throw new CronException(CronErrorKind.ComponentError,
+            throw new CronException(CronErrorKind.InvalidField,
                 $"Invalid step syntax: single number steps like \"{rangePart}/{stepStr}\" are not allowed. Use \"*/{stepStr}\" for wildcard steps or \"X-Y/{stepStr}\" for range steps.");
         }
 
         if (start < Min || end > Max || start > end)
         {
-            throw new CronException(CronErrorKind.ComponentError, "Range is out of bounds in stepping.");
+            throw new CronException(CronErrorKind.InvalidField, "Range is out of bounds in stepping.");
         }
 
         for (int value = start; value <= end; value += step)

@@ -30,6 +30,17 @@ jobs:
       - name: Test
         run: dotnet test --configuration Release --no-build
 
+      - name: Pack
+        if: matrix.os == 'ubuntu-latest'
+        run: dotnet pack src/Croner --configuration Release --no-build --output artifacts
+
+      - name: Upload package
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: package
+          path: artifacts/
+
   publish:
     name: Publish to NuGet
     # Only tags like v1.0.0 publish

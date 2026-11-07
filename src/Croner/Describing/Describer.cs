@@ -5,7 +5,7 @@ using System.Linq;
 namespace Croner.Describing;
 
 /// <summary>Builds human-readable descriptions of cron patterns.</summary>
-public static class Describer
+internal static class Describer
 {
     /// <summary>Describes <paramref name="pattern"/> using <paramref name="lang"/>.</summary>
     public static string Describe(CronPattern pattern, ICronLanguage lang)
@@ -62,7 +62,7 @@ public static class Describer
 
         if (isEverySecond && IsAllSet(p.Minutes) && IsAllSet(p.Hours))
         {
-            return lang.EverySecondPhrase;
+            return lang.EverySecond;
         }
         if (isDefaultSeconds && IsAllSet(p.Minutes) && IsAllSet(p.Hours))
         {
@@ -101,13 +101,13 @@ public static class Describer
         // "* * 0 * * *" -> "Every second past hour 0"
         if (isEverySecond && IsAllSet(p.Minutes) && !IsAllSet(p.Hours))
         {
-            return lang.EveryPastPhrase(lang.EverySecondPhrase, HourDescription(p, hour, lang));
+            return lang.EveryPastPhrase(lang.EverySecond, HourDescription(p, hour, lang));
         }
 
         var parts = new List<string>();
         if (isEverySecond)
         {
-            parts.Add(lang.EverySecondPhrase);
+            parts.Add(lang.EverySecond);
         }
         else if (!isDefaultSeconds)
         {
@@ -137,7 +137,7 @@ public static class Describer
         {
             return lang.EveryMinute;
         }
-        if (parts.Count > 1 && parts[0] == lang.EverySecondPhrase)
+        if (parts.Count > 1 && parts[0] == lang.EverySecond)
         {
             return string.Join(", ", parts);
         }
@@ -193,27 +193,27 @@ public static class Describer
 
     private static string DescribeDay(CronPattern p, ICronLanguage lang)
     {
-        if (p.IsDomWildcard && p.IsDowWildcard)
+        if (p.IsDayOfMonthWildcard && p.IsDayOfWeekWildcard)
         {
             return "";
         }
 
         string domDesc = DescribeDom(p, lang);
-        if (!p.IsDomWildcard && p.IsDowWildcard)
+        if (!p.IsDayOfMonthWildcard && p.IsDayOfWeekWildcard)
         {
             return lang.OnPhrase(domDesc);
         }
 
         List<string> dowParts = DescribeDowParts(p, lang);
         string dowDesc = FormatTextList(dowParts, lang);
-        if (p.IsDomWildcard)
+        if (p.IsDayOfMonthWildcard)
         {
             return lang.OnPhrase(dowDesc);
         }
 
-        if (p.MatchesDomAndDow)
+        if (p.RequiresBothDayFields)
         {
-            string final = dowParts.Count > 1 ? lang.DomAndDowIfAlsoOneOf(dowDesc) : lang.DomAndDowIfAlso(dowDesc);
+            string final = dowParts.Count > 1 ? lang.IfAlsoOneOfDaysOfWeek(dowDesc) : lang.IfAlsoDayOfWeek(dowDesc);
             return $"{lang.OnPhrase(domDesc)} {final}";
         }
         return $"{lang.OnPhrase(domDesc)} {lang.ListConjunctionOr} {dowDesc}";
@@ -222,16 +222,16 @@ public static class Describer
     private static string DescribeDom(CronPattern p, ICronLanguage lang)
     {
         var parts = new List<string>();
-        List<int> regular = p.Days.GetSetValues(CronBits.All);
+        List<int> regular = p.DaysOfMonth.GetSetValues(CronBits.All);
         if (regular.Count > 0)
         {
             parts.Add(lang.DayPhrase(FormatNumberList(regular, lang)));
         }
-        if (p.Days.IsFeatureEnabled(CronBits.Last))
+        if (p.DaysOfMonth.IsFeatureEnabled(CronBits.Last))
         {
             parts.Add(lang.TheLastDayOfTheMonth);
         }
-        List<int> weekdays = p.Days.GetSetValues(CronBits.ClosestWeekday);
+        List<int> weekdays = p.DaysOfMonth.GetSetValues(CronBits.ClosestWeekday);
         if (weekdays.Count > 0)
         {
             parts.Add(lang.TheWeekdayNearestDay(FormatNumberList(weekdays, lang)));
@@ -242,7 +242,7 @@ public static class Describer
     private static List<string> DescribeDowParts(CronPattern p, ICronLanguage lang)
     {
         var parts = new List<string>();
-        string[] names = lang.DayOfWeekNames;
+        IReadOnlyList<string> names = lang.DayOfWeekNames;
         string Name(int v) => names[v % 7];
 
         List<int> last = p.DaysOfWeek.GetSetValues(CronBits.Last);
