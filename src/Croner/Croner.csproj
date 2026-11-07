@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>Croner</RootNamespace>
+    <AssemblyName>Croner</AssemblyName>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <IsTrimmable>true</IsTrimmable>
+    <IsAotCompatible>true</IsAotCompatible>
+
+    <!-- NuGet -->
+    <PackageId>Croner</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>Hexagon</Authors>
+    <Description>Trigger functions and/or evaluate cron expressions in .NET. Parses OCPS-compliant cron patterns (seconds, years, L, W, #, +), finds next/previous occurrences with correct DST handling across any TimeZoneInfo, describes patterns in plain language, and schedules jobs. A port of croner (JavaScript) and croner-rust.</Description>
+    <PackageTags>cron;crontab;scheduler;schedule;job;timer;ocps;quartz</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/hexagon/croner-dotnet</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/hexagon/croner-dotnet</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+    <InternalsVisibleTo Include="Croner.Tests" />
+  </ItemGroup>
+
+</Project>
