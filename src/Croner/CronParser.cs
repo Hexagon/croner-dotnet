@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 
 namespace Croner;
 
@@ -99,10 +100,7 @@ public sealed class CronParser
     /// <exception cref="CronException">The pattern is invalid.</exception>
     public Cron Parse(string pattern)
     {
-        if (pattern is null)
-        {
-            throw new ArgumentNullException(nameof(pattern));
-        }
+        ArgumentNullException.ThrowIfNull(pattern);
 
         string upper = pattern.ToUpperInvariant().Trim();
         if (upper.Length == 0)
@@ -115,10 +113,7 @@ public sealed class CronParser
             upper = HandleNicknames(upper, Options.Seconds == SecondsMode.Required, Options.Year == YearMode.Required);
         }
 
-        string normalized = Replace(upper, Options.AlternativeWeekdays ? AlternativeWeekdayNames : Weekdays);
-        normalized = Replace(normalized, MonthNames);
-
-        var parts = new List<string>(normalized.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var parts = new List<string>(upper.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
         int numParts = parts.Count;
 
         if (numParts == 5)
@@ -162,6 +157,10 @@ public sealed class CronParser
         {
             throw new CronException(CronErrorKind.InvalidPattern, "Pattern must have between 5 and 7 fields.");
         }
+
+        // Names are only valid in their own field, so "0 0 * MON *" is rejected instead of read as January.
+        parts[4] = Replace(parts[4], MonthNames);
+        parts[5] = Replace(parts[5], Options.AlternativeWeekdays ? AlternativeWeekdayNames : Weekdays);
 
         // '?' is an alias for '*' in day-of-month and day-of-week
         parts[3] = parts[3].Replace('?', '*');
@@ -214,9 +213,14 @@ public sealed class CronParser
             starDom, starDow, Options.DomAndDow || domAndDowFromPattern));
     }
 
-    /// <summary>Tries to parse a cron pattern.</summary>
-    public bool TryParse(string pattern, out Cron? cron)
+    /// <summary>Tries to parse a cron pattern. Returns <c>false</c> when it is <c>null</c> or invalid.</summary>
+    public bool TryParse([NotNullWhen(true)] string? pattern, [NotNullWhen(true)] out Cron? cron)
     {
+        if (pattern is null)
+        {
+            cron = null;
+            return false;
+        }
         try
         {
             cron = Parse(pattern);
@@ -242,7 +246,7 @@ public sealed class CronParser
                 if (!allowed)
                 {
                     throw new CronException(CronErrorKind.IllegalCharacters,
-                        $"CronPattern contains illegal character '{ch}' in part '{part}'");
+                        $"'{ch}' in field '{part}'");
                 }
             }
         }

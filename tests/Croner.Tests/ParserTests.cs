@@ -294,6 +294,27 @@ public class ParserTests
         Assert.Equal(Cron.Parse("0 0 * * MON-FRI"), Cron.Parse("0 0 * * 1-5"));
         Assert.Equal(Cron.Parse("0 0 * * MON-FRI").GetHashCode(), Cron.Parse("0 0 * * 1-5").GetHashCode());
         Assert.NotEqual(Cron.Parse("0 0 * * MON"), Cron.Parse("0 0 * * TUE"));
+        Assert.Equal(Cron.Parse("0 0 * * MON"), Cron.Parse("0 0 * * MON", new CronParserOptions { AlternativeWeekdays = true }));
+        Assert.Equal(Cron.Parse("*/5 * * * *"), Cron.Parse("*/5 * * * *", new CronParserOptions { SloppyRanges = true }));
+    }
+
+    [Theory]
+    [InlineData("0 0 * MON *")]
+    [InlineData("0 0 * * JAN")]
+    [InlineData("0 0 MON * *")]
+    [InlineData("JAN 0 * * *")]
+    public void NamesOnlyInTheirOwnField(string pattern)
+    {
+        Assert.Equal(CronErrorKind.IllegalCharacters, Assert.Throws<CronException>(() => Cron.Parse(pattern)).Kind);
+    }
+
+    [Fact]
+    public void TryParseNull()
+    {
+        Assert.False(Cron.TryParse(null, out Cron? cron));
+        Assert.Null(cron);
+        Assert.True(Cron.TryParse("0 0 * * *", out cron));
+        Assert.Equal("0 0 * * *", cron.ToString());
     }
 
     [Fact]

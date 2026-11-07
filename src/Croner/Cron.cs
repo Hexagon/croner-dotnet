@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 
 namespace Croner;
 
@@ -74,11 +75,12 @@ public sealed class Cron : IEquatable<Cron>
     public static Cron Parse(string pattern, CronParserOptions? options = null) =>
         new CronParser(options).Parse(pattern);
 
-    /// <summary>Tries to parse a cron pattern with the default options.</summary>
-    public static bool TryParse(string pattern, out Cron? cron) => new CronParser().TryParse(pattern, out cron);
+    /// <summary>Tries to parse a cron pattern with the default options. Returns <c>false</c> when it is <c>null</c> or invalid.</summary>
+    public static bool TryParse([NotNullWhen(true)] string? pattern, [NotNullWhen(true)] out Cron? cron) =>
+        new CronParser().TryParse(pattern, out cron);
 
-    /// <summary>Tries to parse a cron pattern with the given options.</summary>
-    public static bool TryParse(string pattern, CronParserOptions? options, out Cron? cron) =>
+    /// <summary>Tries to parse a cron pattern with the given options. Returns <c>false</c> when it is <c>null</c> or invalid.</summary>
+    public static bool TryParse([NotNullWhen(true)] string? pattern, CronParserOptions? options, [NotNullWhen(true)] out Cron? cron) =>
         new CronParser(options).TryParse(pattern, out cron);
 
     // ------------------------------------------------------------------
@@ -273,7 +275,7 @@ public sealed class Cron : IEquatable<Cron>
     public override int GetHashCode() => Pattern.GetHashCode();
 
     // ------------------------------------------------------------------
-    // Search internals (ported from croner-rust)
+    // Search internals
     // ------------------------------------------------------------------
 
     private static JobType ComputeJobType(CronPattern p)

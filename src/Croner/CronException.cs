@@ -53,13 +53,13 @@ public sealed class CronException : Exception
 
     private static string FormatMessage(CronErrorKind kind, string? detail) => kind switch
     {
-        CronErrorKind.TimeSearchLimitExceeded => "CronScheduler time search limit exceeded.",
-        CronErrorKind.EmptyPattern => "CronPattern cannot be an empty string.",
-        CronErrorKind.InvalidDate => "CronScheduler encountered an invalid date.",
-        CronErrorKind.InvalidTime => "CronScheduler encountered an invalid time.",
+        CronErrorKind.TimeSearchLimitExceeded => "No matching time was found within the search limits.",
+        CronErrorKind.EmptyPattern => "The pattern is empty.",
+        CronErrorKind.InvalidDate => "Encountered an invalid date.",
+        CronErrorKind.InvalidTime => "Encountered an invalid time.",
         CronErrorKind.InvalidPattern => $"Invalid pattern: {detail}",
-        CronErrorKind.IllegalCharacters => $"Pattern contains illegal characters: {detail}",
-        CronErrorKind.ComponentError => $"Component error: {detail}",
+        CronErrorKind.IllegalCharacters => $"Pattern contains an illegal character: {detail}",
+        CronErrorKind.ComponentError => $"Invalid field: {detail}",
         _ => detail ?? kind.ToString(),
     };
 }

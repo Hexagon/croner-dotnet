@@ -239,8 +239,9 @@ public sealed class CronPattern : IEquatable<CronPattern>
     public override string ToString() => Pattern;
 
     /// <summary>
-    /// Functional equality: two patterns are equal when they schedule the same times, regardless
-    /// of how the pattern strings were written.
+    /// Two patterns are equal when their parsed fields are equal, regardless of how the pattern
+    /// strings were written: names or numbers, letter case, <c>?</c> or <c>*</c>, and the parser's
+    /// weekday numbering do not matter.
     /// </summary>
     public bool Equals(CronPattern? other)
     {

@@ -396,10 +396,7 @@ public sealed class CronJob : IDisposable
     /// <summary>Starts a job created without a callback, with an asynchronous callback.</summary>
     public CronJob Schedule(Func<CronJob, Task> callback)
     {
-        if (callback is null)
-        {
-            throw new ArgumentNullException(nameof(callback));
-        }
+        ArgumentNullException.ThrowIfNull(callback);
         lock (_lock)
         {
             if (_callback is not null)
@@ -725,7 +722,7 @@ public sealed class CronJob : IDisposable
         Resolution resolution = _zone.Resolve(parsed);
         if (resolution.Kind == ResolutionKind.Gap)
         {
-            throw new ArgumentException($"'{value}' does not exist in the job's time zone.", nameof(value));
+            throw new ArgumentException($"'{value}' does not exist in the job's time zone.", "pattern");
         }
         return resolution.Earlier;
     }

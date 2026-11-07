@@ -435,8 +435,6 @@ public sealed class CronComponent : IEquatable<CronComponent>
             && FromWildcard == other.FromWildcard
             && _features == other._features
             && _enabledFeatures == other._enabledFeatures
-            && _inputOffset == other._inputOffset
-            && _sloppyRanges == other._sloppyRanges
             && _bitfields.AsSpan().SequenceEqual(other._bitfields);
     }
 
