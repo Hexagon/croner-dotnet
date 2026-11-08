@@ -21,21 +21,21 @@ public sealed class CronPattern : IEquatable<CronPattern>
         bool starDow,
         bool domAndDow)
     {
-        Pattern = pattern;
+        Expression = pattern;
         Seconds = seconds;
         Minutes = minutes;
         Hours = hours;
-        Days = days;
+        DaysOfMonth = days;
         Months = months;
         DaysOfWeek = daysOfWeek;
         Years = years;
-        IsDomWildcard = starDom;
-        IsDowWildcard = starDow;
-        MatchesDomAndDow = domAndDow;
+        IsDayOfMonthWildcard = starDom;
+        IsDayOfWeekWildcard = starDow;
+        RequiresBothDayFields = domAndDow;
     }
 
     /// <summary>The pattern string, after nicknames such as <c>@daily</c> were expanded and it was upper-cased.</summary>
-    public string Pattern { get; }
+    public string Expression { get; }
 
     /// <summary>The seconds field (0-59).</summary>
     public CronComponent Seconds { get; }
@@ -47,7 +47,7 @@ public sealed class CronPattern : IEquatable<CronPattern>
     public CronComponent Hours { get; }
 
     /// <summary>The day-of-month field (1-31).</summary>
-    public CronComponent Days { get; }
+    public CronComponent DaysOfMonth { get; }
 
     /// <summary>The month field (1-12).</summary>
     public CronComponent Months { get; }
@@ -59,24 +59,24 @@ public sealed class CronPattern : IEquatable<CronPattern>
     public CronComponent Years { get; }
 
     /// <summary>
-    /// Whether the day-of-month field is <c>*</c>. Unless <see cref="MatchesDomAndDow"/> is set,
+    /// Whether the day-of-month field is <c>*</c>. Unless <see cref="RequiresBothDayFields"/> is set,
     /// a day matches when either its day of month or its weekday matches, except that a <c>*</c>
     /// field is ignored.
     /// </summary>
-    public bool IsDomWildcard { get; }
+    public bool IsDayOfMonthWildcard { get; }
 
-    /// <summary>Whether the day-of-week field is <c>*</c>. See <see cref="IsDomWildcard"/>.</summary>
-    public bool IsDowWildcard { get; }
+    /// <summary>Whether the day-of-week field is <c>*</c>. See <see cref="IsDayOfMonthWildcard"/>.</summary>
+    public bool IsDayOfWeekWildcard { get; }
 
     /// <summary>
     /// Whether a day must match both the day-of-month and day-of-week fields, from the <c>+</c>
-    /// prefix or the parser's <see cref="CronParserOptions.DomAndDow"/> option.
+    /// prefix or the parser's <see cref="CronParserOptions.RequireBothDayFields"/> option.
     /// </summary>
-    public bool MatchesDomAndDow { get; }
+    public bool RequiresBothDayFields { get; }
 
     internal bool YearMatch(int year)
     {
-        if (year < Cron.YearLowerLimit || year > Cron.YearUpperLimit)
+        if (year < Cron.MinYear || year > Cron.MaxYear)
         {
             return false;
         }
@@ -106,11 +106,11 @@ public sealed class CronPattern : IEquatable<CronPattern>
         }
 
         int weekdayBit = (int)weekday;
-        bool dayMatches = Days.Has(day, CronBits.All);
+        bool dayMatches = DaysOfMonth.Has(day, CronBits.All);
         bool dowMatches = false;
 
-        bool lastEnabled = Days.IsFeatureEnabled(CronBits.Last);
-        bool closestEnabled = Days.IsFeatureEnabled(CronBits.ClosestWeekday);
+        bool lastEnabled = DaysOfMonth.IsFeatureEnabled(CronBits.Last);
+        bool closestEnabled = DaysOfMonth.IsFeatureEnabled(CronBits.ClosestWeekday);
 
         // LW (last weekday) - both LAST and CLOSEST_WEEKDAY enabled
         if (!dayMatches && lastEnabled && closestEnabled
@@ -144,13 +144,13 @@ public sealed class CronPattern : IEquatable<CronPattern>
 
         dowMatches = dowMatches || DaysOfWeek.Has(weekdayBit, CronBits.All);
 
-        if ((dayMatches && IsDowWildcard) || (dowMatches && IsDomWildcard))
+        if ((dayMatches && IsDayOfWeekWildcard) || (dowMatches && IsDayOfMonthWildcard))
         {
             return true;
         }
-        if (!IsDomWildcard && !IsDowWildcard)
+        if (!IsDayOfMonthWildcard && !IsDayOfWeekWildcard)
         {
-            return MatchesDomAndDow ? dayMatches && dowMatches : dayMatches || dowMatches;
+            return RequiresBothDayFields ? dayMatches && dowMatches : dayMatches || dowMatches;
         }
         return false;
     }
@@ -170,7 +170,7 @@ public sealed class CronPattern : IEquatable<CronPattern>
         int last = Math.Min(day + 2, monthLength);
         for (int patternDay = first; patternDay <= last; patternDay++)
         {
-            if (!Days.Has(patternDay, CronBits.ClosestWeekday))
+            if (!DaysOfMonth.Has(patternDay, CronBits.ClosestWeekday))
             {
                 continue;
             }
@@ -236,11 +236,12 @@ public sealed class CronPattern : IEquatable<CronPattern>
     public string Describe(Describing.ICronLanguage language) => Describing.Describer.Describe(this, language);
 
     /// <inheritdoc />
-    public override string ToString() => Pattern;
+    public override string ToString() => Expression;
 
     /// <summary>
-    /// Functional equality: two patterns are equal when they schedule the same times, regardless
-    /// of how the pattern strings were written.
+    /// Two patterns are equal when their parsed fields are equal, regardless of how the pattern
+    /// strings were written: names or numbers, letter case, <c>?</c> or <c>*</c>, and the parser's
+    /// weekday numbering do not matter.
     /// </summary>
     public bool Equals(CronPattern? other)
     {
@@ -251,13 +252,13 @@ public sealed class CronPattern : IEquatable<CronPattern>
         return Seconds.Equals(other.Seconds)
             && Minutes.Equals(other.Minutes)
             && Hours.Equals(other.Hours)
-            && Days.Equals(other.Days)
+            && DaysOfMonth.Equals(other.DaysOfMonth)
             && Months.Equals(other.Months)
             && DaysOfWeek.Equals(other.DaysOfWeek)
             && Years.Equals(other.Years)
-            && IsDomWildcard == other.IsDomWildcard
-            && IsDowWildcard == other.IsDowWildcard
-            && MatchesDomAndDow == other.MatchesDomAndDow;
+            && IsDayOfMonthWildcard == other.IsDayOfMonthWildcard
+            && IsDayOfWeekWildcard == other.IsDayOfWeekWildcard
+            && RequiresBothDayFields == other.RequiresBothDayFields;
     }
 
     /// <inheritdoc />
@@ -265,6 +266,6 @@ public sealed class CronPattern : IEquatable<CronPattern>
 
     /// <inheritdoc />
     public override int GetHashCode() =>
-        HashCode.Combine(Seconds, Minutes, Hours, Days, Months, DaysOfWeek, Years,
-            HashCode.Combine(IsDomWildcard, IsDowWildcard, MatchesDomAndDow));
+        HashCode.Combine(Seconds, Minutes, Hours, DaysOfMonth, Months, DaysOfWeek, Years,
+            HashCode.Combine(IsDayOfMonthWildcard, IsDayOfWeekWildcard, RequiresBothDayFields));
 }

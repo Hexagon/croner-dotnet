@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 namespace Croner.Describing;
 
 /// <summary>English phrases for pattern descriptions (the default).</summary>
@@ -9,17 +11,17 @@ public sealed class English : ICronLanguage
     /// <inheritdoc />
     public string EveryMinute => "Every minute";
     /// <inheritdoc />
-    public string EverySecondPhrase => "Every second";
+    public string EverySecond => "Every second";
     /// <inheritdoc />
-    public string EveryXMinutes(int step) => $"every {step} minutes";
+    public string EveryXMinutes(int interval) => $"every {interval} minutes";
     /// <inheritdoc />
-    public string EveryXSeconds(int step) => $"every {step} seconds";
+    public string EveryXSeconds(int interval) => $"every {interval} seconds";
     /// <inheritdoc />
-    public string EveryXHours(int step) => $"of every {step} hours";
+    public string EveryXHours(int interval) => $"of every {interval} hours";
     /// <inheritdoc />
     public string AtTime(string time) => $"At {time}";
     /// <inheritdoc />
-    public string AtTimeAndEveryXSeconds(string time, int step) => $"At {time}, every {step} seconds";
+    public string AtTimeAndEveryXSeconds(string time, int interval) => $"At {time}, every {interval} seconds";
     /// <inheritdoc />
     public string AtTimeAtSecond(string time, string second) => $"At {time}, at second {second}";
     /// <inheritdoc />
@@ -55,22 +57,22 @@ public sealed class English : ICronLanguage
     }
 
     /// <inheritdoc />
-    public string DomAndDowIfAlso(string dow) => $"(if it is also {dow})";
+    public string IfAlsoDayOfWeek(string dow) => $"(if it is also {dow})";
     /// <inheritdoc />
-    public string DomAndDowIfAlsoOneOf(string dow) => $"(if it is also one of: {dow})";
+    public string IfAlsoOneOfDaysOfWeek(string dow) => $"(if it is also one of: {dow})";
     /// <inheritdoc />
     public string ListConjunctionAnd => "and";
     /// <inheritdoc />
     public string ListConjunctionOr => "or";
 
     /// <inheritdoc />
-    public string[] DayOfWeekNames { get; } =
-        { "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" };
+    public IReadOnlyList<string> DayOfWeekNames { get; } =
+        ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
     /// <inheritdoc />
-    public string[] MonthNames { get; } =
-    {
+    public IReadOnlyList<string> MonthNames { get; } =
+    [
         "January", "February", "March", "April", "May", "June",
         "July", "August", "September", "October", "November", "December",
-    };
+    ];
 }

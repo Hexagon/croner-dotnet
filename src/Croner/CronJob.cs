@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
 using System.Runtime.ExceptionServices;
 using System.Threading;
@@ -12,18 +11,20 @@ namespace Croner;
 /// A scheduled job: runs a callback on a cron pattern (or once, at a given time), and answers
 /// questions about its schedule.
 /// </summary>
+/// <remarks>
+/// Members are thread-safe. Dispose the job, or call <see cref="Stop"/> or <see cref="StopAsync"/>,
+/// to stop its timer.
+/// </remarks>
 /// <example>
 /// <code>
 /// using var job = new CronJob("*/5 * * * * *", _ => Console.WriteLine("Every 5 seconds"));
 ///
 /// // Only evaluate, never run:
-/// var next = new CronJob("0 0 * * FRI").NextRun();
+/// DateTimeOffset? next = new CronJob("0 0 * * FRI").GetNextRun();
 /// </code>
 /// </example>
-public sealed class CronJob : IDisposable
+public sealed class CronJob : IDisposable, IAsyncDisposable
 {
-    private static readonly List<CronJob> Registry = new();
-
     // Longest single timer wait; longer waits are re-checked when it fires.
     private static readonly TimeSpan MaxDelay = TimeSpan.FromMilliseconds(int.MaxValue);
 
@@ -34,62 +35,91 @@ public sealed class CronJob : IDisposable
     private readonly DateTimeOffset? _stopAt;
     private readonly TimeSpan _startAtRounding;
     private readonly DateTimeOffset? _once;
+    private readonly CancellationTokenSource _stopping = new();
+    private readonly HashSet<Task> _inFlight = new();
 
-    private Func<CronJob, Task>? _callback;
+    private Func<CronJob, CancellationToken, Task>? _callback;
     private ITimer? _timer;
     private bool _kill;
     private bool _paused;
-    private volatile bool _blocking;
+    private int _executing;
     private int? _maxRuns;
     private DateTimeOffset? _currentRun;
     private DateTimeOffset? _previousRun;
 
     /// <summary>
-    /// Creates a job without a callback, to evaluate the schedule. Call <see cref="Schedule(Action{CronJob})"/> to start it.
+    /// Creates a job that only evaluates its schedule. Call <see cref="Start(Action{CronJob})"/> to run a callback.
     /// </summary>
-    /// <param name="pattern">A cron pattern, or an ISO 8601 date and time (containing <c>:</c>) for a one-off job.</param>
+    /// <param name="pattern">A cron pattern.</param>
     /// <param name="options">Options.</param>
+    /// <exception cref="CronException">The pattern is invalid.</exception>
     public CronJob(string pattern, CronJobOptions? options = null)
-        : this(pattern ?? throw new ArgumentNullException(nameof(pattern)), null, (Func<CronJob, Task>?)null, options)
+        : this(ParsePattern(pattern, options), null, null, options)
     {
     }
 
     /// <summary>Creates and starts a job.</summary>
-    /// <param name="pattern">A cron pattern, or an ISO 8601 date and time (containing <c>:</c>) for a one-off job.</param>
+    /// <param name="pattern">A cron pattern.</param>
     /// <param name="callback">Runs on every match.</param>
     /// <param name="options">Options.</param>
+    /// <exception cref="CronException">The pattern is invalid.</exception>
     public CronJob(string pattern, Action<CronJob> callback, CronJobOptions? options = null)
-        : this(pattern ?? throw new ArgumentNullException(nameof(pattern)), null,
-            Wrap(callback ?? throw new ArgumentNullException(nameof(callback))), options)
+        : this(ParsePattern(pattern, options), null, Wrap(callback), options)
     {
     }
 
     /// <summary>Creates and starts a job with an asynchronous callback.</summary>
-    /// <param name="pattern">A cron pattern, or an ISO 8601 date and time (containing <c>:</c>) for a one-off job.</param>
-    /// <param name="callback">Runs on every match. Overrun protection waits for the returned task.</param>
+    /// <param name="pattern">A cron pattern.</param>
+    /// <param name="callback">Runs on every match. Overlap prevention waits for the returned task.</param>
     /// <param name="options">Options.</param>
+    /// <exception cref="CronException">The pattern is invalid.</exception>
     public CronJob(string pattern, Func<CronJob, Task> callback, CronJobOptions? options = null)
-        : this(pattern ?? throw new ArgumentNullException(nameof(pattern)), null,
-            callback ?? throw new ArgumentNullException(nameof(callback)), options)
+        : this(ParsePattern(pattern, options), null, Wrap(callback), options)
     {
     }
 
-    /// <summary>Creates a one-off job that runs once, at <paramref name="runAt"/>. Without a callback it only evaluates.</summary>
-    public CronJob(DateTimeOffset runAt, Action<CronJob>? callback = null, CronJobOptions? options = null)
-        : this(null, runAt, callback is null ? null : Wrap(callback), options)
+    /// <summary>Creates and starts a job with an asynchronous, cancellable callback.</summary>
+    /// <param name="pattern">A cron pattern.</param>
+    /// <param name="callback">
+    /// Runs on every match. The token is cancelled when the job is stopped or disposed.
+    /// Overlap prevention waits for the returned task.
+    /// </param>
+    /// <param name="options">Options.</param>
+    /// <exception cref="CronException">The pattern is invalid.</exception>
+    public CronJob(string pattern, Func<CronJob, CancellationToken, Task> callback, CronJobOptions? options = null)
+        : this(ParsePattern(pattern, options), null, callback ?? throw new ArgumentNullException(nameof(callback)), options)
     {
     }
 
-    /// <summary>Creates a one-off asynchronous job that runs once, at <paramref name="runAt"/>.</summary>
+    /// <summary>Creates a one-off job that only evaluates its schedule.</summary>
+    /// <param name="runAt">When the job runs.</param>
+    /// <param name="options">Options.</param>
+    public CronJob(DateTimeOffset runAt, CronJobOptions? options = null)
+        : this(null, runAt, null, options)
+    {
+    }
+
+    /// <summary>Creates and starts a job that runs once, at <paramref name="runAt"/>.</summary>
+    public CronJob(DateTimeOffset runAt, Action<CronJob> callback, CronJobOptions? options = null)
+        : this(null, runAt, Wrap(callback), options)
+    {
+    }
+
+    /// <summary>Creates and starts an asynchronous job that runs once, at <paramref name="runAt"/>.</summary>
     public CronJob(DateTimeOffset runAt, Func<CronJob, Task> callback, CronJobOptions? options = null)
+        : this(null, runAt, Wrap(callback), options)
+    {
+    }
+
+    /// <summary>Creates and starts an asynchronous, cancellable job that runs once, at <paramref name="runAt"/>.</summary>
+    public CronJob(DateTimeOffset runAt, Func<CronJob, CancellationToken, Task> callback, CronJobOptions? options = null)
         : this(null, runAt, callback ?? throw new ArgumentNullException(nameof(callback)), options)
     {
     }
 
-    private CronJob(string? pattern, DateTimeOffset? runAt, Func<CronJob, Task>? callback, CronJobOptions? options)
+    private CronJob(Cron? cron, DateTimeOffset? runAt, Func<CronJob, CancellationToken, Task>? callback, CronJobOptions? options)
     {
         Options = options ?? new CronJobOptions();
-        Name = Options.Name;
         _time = Options.TimeProvider ?? TimeProvider.System;
 
         if (Options.TimeZone is not null && Options.UtcOffset is not null)
@@ -98,11 +128,11 @@ public sealed class CronJob : IDisposable
         }
         if (Options.UtcOffset is TimeSpan offset && (offset < TimeSpan.FromMinutes(-870) || offset > TimeSpan.FromMinutes(870)))
         {
-            throw new ArgumentOutOfRangeException(nameof(options), "UtcOffset out of bounds.");
+            throw new ArgumentOutOfRangeException(nameof(options), "UtcOffset must be between -14:30 and +14:30.");
         }
-        if (Options.Interval < TimeSpan.Zero)
+        if (Options.MinimumInterval < TimeSpan.Zero)
         {
-            throw new ArgumentOutOfRangeException(nameof(options), "Interval can not be negative.");
+            throw new ArgumentOutOfRangeException(nameof(options), "MinimumInterval can not be negative.");
         }
         if (Options.MaxRuns is < 0)
         {
@@ -111,7 +141,7 @@ public sealed class CronJob : IDisposable
 
         _zone = Options.TimeZone is not null ? Zone.Of(Options.TimeZone)
             : Options.UtcOffset is TimeSpan fixedOffset ? Zone.Fixed(fixedOffset)
-            : Zone.Of(TimeZoneInfo.Local);
+            : Zone.Of(_time.LocalTimeZone);
 
         if (Options.StartAt is DateTimeOffset startAt)
         {
@@ -125,32 +155,9 @@ public sealed class CronJob : IDisposable
         }
 
         _maxRuns = Options.MaxRuns;
-        _paused = Options.Paused;
-
-        if (runAt is not null)
-        {
-            _once = runAt;
-        }
-        else if (pattern!.IndexOf(':') > 0)
-        {
-            _once = ParseDate(pattern);
-        }
-        else
-        {
-            Cron = Cron.Parse(pattern, Options.ToParserOptions());
-        }
-
-        if (Name is not null)
-        {
-            lock (Registry)
-            {
-                if (Registry.Any(j => j.Name == Name))
-                {
-                    throw new InvalidOperationException($"Tried to initialize new named job '{Name}', but name already taken.");
-                }
-                Registry.Add(this);
-            }
-        }
+        _paused = Options.StartPaused;
+        Cron = cron;
+        _once = runAt is DateTimeOffset once ? _zone.ToZone(once) : null;
 
         if (callback is not null)
         {
@@ -159,44 +166,41 @@ public sealed class CronJob : IDisposable
         }
     }
 
-    /// <summary>Named jobs that have not been stopped.</summary>
-    public static IReadOnlyList<CronJob> ScheduledJobs
-    {
-        get
-        {
-            lock (Registry)
-            {
-                return Registry.ToArray();
-            }
-        }
-    }
-
-    /// <summary>The job's name, if any.</summary>
-    public string? Name { get; }
+    /// <summary>The job's name, from <see cref="CronJobOptions.Name"/>.</summary>
+    public string? Name => Options.Name;
 
     /// <summary>The options the job was created with.</summary>
     public CronJobOptions Options { get; }
 
-    /// <summary>The parsed pattern, or <c>null</c> for a one-off job.</summary>
+    /// <summary>The parsed schedule, or <c>null</c> for a one-off job.</summary>
     public Cron? Cron { get; }
+
+    /// <summary>The run time of a one-off job, or <c>null</c> for a cron job.</summary>
+    public DateTimeOffset? RunOnceAt => _once;
 
     /// <summary>The value of <see cref="CronJobOptions.Context"/>.</summary>
     public object? Context => Options.Context;
 
-    /// <summary>The original pattern, or <c>null</c> for a one-off job.</summary>
-    public string? Pattern => Cron?.Pattern.Pattern;
-
-    /// <summary>The run time of a one-off job, or <c>null</c> for a pattern job.</summary>
-    public DateTimeOffset? Once => _once;
-
-    /// <summary>Whether the job is scheduled and waiting for a future run.</summary>
-    public bool IsRunning
+    /// <summary>Whether the job has a callback, is not paused or stopped, and has a future run.</summary>
+    public bool IsScheduled
     {
         get
         {
             lock (_lock)
             {
                 return !_paused && !_kill && _callback is not null && NextTarget(_currentRun, Now()) is not null;
+            }
+        }
+    }
+
+    /// <summary>Whether the job is paused.</summary>
+    public bool IsPaused
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _paused;
             }
         }
     }
@@ -214,7 +218,16 @@ public sealed class CronJob : IDisposable
     }
 
     /// <summary>Whether the callback is executing right now.</summary>
-    public bool IsBusy => _blocking;
+    public bool IsExecuting
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _executing > 0;
+            }
+        }
+    }
 
     /// <summary>The start time of the current run, or of the latest if none is in progress.</summary>
     public DateTimeOffset? CurrentRun
@@ -240,8 +253,8 @@ public sealed class CronJob : IDisposable
         }
     }
 
-    /// <summary>Remaining scheduled runs, or <c>null</c> for unlimited.</summary>
-    public int? RunsLeft
+    /// <summary>Remaining scheduled runs with <see cref="CronJobOptions.MaxRuns"/>, otherwise <c>null</c>.</summary>
+    public int? RemainingRuns
     {
         get
         {
@@ -252,8 +265,8 @@ public sealed class CronJob : IDisposable
         }
     }
 
-    /// <summary>Finds the next run after <paramref name="from"/> (default: now), or <c>null</c> if there is none.</summary>
-    public DateTimeOffset? NextRun(DateTimeOffset? from = null)
+    /// <summary>Gets the next run after <paramref name="from"/> (default: now), or <c>null</c> if there is none.</summary>
+    public DateTimeOffset? GetNextRun(DateTimeOffset? from = null)
     {
         lock (_lock)
         {
@@ -261,58 +274,21 @@ public sealed class CronJob : IDisposable
         }
     }
 
-    /// <summary>Finds the next <paramref name="count"/> runs after <paramref name="from"/> (default: the current run, or now).</summary>
-    public IReadOnlyList<DateTimeOffset> NextRuns(int count, DateTimeOffset? from = null)
-    {
-        lock (_lock)
-        {
-            if (_maxRuns is int max && count > max)
-            {
-                count = max;
-            }
-            var runs = new List<DateTimeOffset>();
-            DateTimeOffset now = Now();
-            DateTimeOffset? cursor = from ?? _currentRun;
-            while (count-- > 0 && NextTarget(cursor, now) is DateTimeOffset run)
-            {
-                runs.Add(run);
-                cursor = run;
-            }
-            return runs;
-        }
-    }
-
-    /// <summary>Finds the previous <paramref name="count"/> runs before <paramref name="reference"/> (default: now), most recent first.</summary>
-    public IReadOnlyList<DateTimeOffset> PreviousRuns(int count, DateTimeOffset? reference = null)
-    {
-        lock (_lock)
-        {
-            var runs = new List<DateTimeOffset>();
-            DateTimeOffset now = Now();
-            DateTimeOffset? cursor = reference;
-            while (count-- > 0 && PreviousTarget(cursor, now) is DateTimeOffset run)
-            {
-                runs.Add(run);
-                cursor = run;
-            }
-            return runs;
-        }
-    }
-
     /// <summary>
-    /// Enumerates future runs after <paramref name="startAt"/> (exclusive, default now), respecting
+    /// Lazily enumerates the runs after <paramref name="from"/> (default: the current run, or now), respecting
     /// <see cref="CronJobOptions.MaxRuns"/>, <see cref="CronJobOptions.StopAt"/> and the other options.
     /// </summary>
-    public IEnumerable<DateTimeOffset> Enumerate(DateTimeOffset? startAt = null)
+    public IEnumerable<DateTimeOffset> GetNextRuns(DateTimeOffset? from = null)
     {
         int remaining;
         DateTimeOffset now;
+        DateTimeOffset? cursor;
         lock (_lock)
         {
             remaining = _maxRuns ?? int.MaxValue;
             now = Now();
+            cursor = from ?? _currentRun;
         }
-        DateTimeOffset? cursor = startAt;
         while (remaining-- > 0)
         {
             DateTimeOffset? next;
@@ -329,8 +305,36 @@ public sealed class CronJob : IDisposable
         }
     }
 
+    /// <summary>
+    /// Lazily enumerates the runs before <paramref name="before"/> (default: now), most recent first,
+    /// respecting <see cref="CronJobOptions.StartAt"/> and the other options.
+    /// </summary>
+    public IEnumerable<DateTimeOffset> GetPreviousRuns(DateTimeOffset? before = null)
+    {
+        DateTimeOffset now;
+        lock (_lock)
+        {
+            now = Now();
+        }
+        DateTimeOffset? cursor = before;
+        while (true)
+        {
+            DateTimeOffset? previous;
+            lock (_lock)
+            {
+                previous = PreviousTarget(cursor, now);
+            }
+            if (previous is null)
+            {
+                yield break;
+            }
+            yield return previous.Value;
+            cursor = previous;
+        }
+    }
+
     /// <summary>Time from <paramref name="from"/> (default now) to the next run, or <c>null</c> if there is none.</summary>
-    public TimeSpan? TimeToNext(DateTimeOffset? from = null)
+    public TimeSpan? GetTimeToNextRun(DateTimeOffset? from = null)
     {
         lock (_lock)
         {
@@ -340,13 +344,13 @@ public sealed class CronJob : IDisposable
     }
 
     /// <summary>Checks whether <paramref name="time"/> (to the second) matches the schedule.</summary>
-    public bool Match(DateTimeOffset time)
+    public bool IsMatch(DateTimeOffset time)
     {
         if (_once is DateTimeOffset once)
         {
             return TruncateToSecond(time) == TruncateToSecond(once);
         }
-        return Cron!.IsTimeMatching(_zone.ToZone(time));
+        return Cron!.IsMatch(_zone.ToZone(time));
     }
 
     /// <summary>Pauses the job. Returns <c>false</c> if it was stopped.</summary>
@@ -369,42 +373,26 @@ public sealed class CronJob : IDisposable
         }
     }
 
-    /// <summary>
-    /// Stops the job for good. A run in progress finishes. A named job is removed from <see cref="ScheduledJobs"/>.
-    /// </summary>
-    public void Stop()
-    {
-        lock (_lock)
-        {
-            _kill = true;
-            _timer?.Dispose();
-            _timer = null;
-        }
-        lock (Registry)
-        {
-            Registry.Remove(this);
-        }
-    }
-
-    /// <summary>Stops the job.</summary>
-    public void Dispose() => Stop();
-
     /// <summary>Starts a job created without a callback.</summary>
-    public CronJob Schedule(Action<CronJob> callback) =>
-        Schedule(Wrap(callback ?? throw new ArgumentNullException(nameof(callback))));
+    /// <exception cref="InvalidOperationException">The job already has a callback.</exception>
+    public CronJob Start(Action<CronJob> callback) => Start(Wrap(callback));
 
     /// <summary>Starts a job created without a callback, with an asynchronous callback.</summary>
-    public CronJob Schedule(Func<CronJob, Task> callback)
+    /// <exception cref="InvalidOperationException">The job already has a callback.</exception>
+    public CronJob Start(Func<CronJob, Task> callback) => Start(Wrap(callback));
+
+    /// <summary>
+    /// Starts a job created without a callback, with an asynchronous callback whose token is cancelled when the job stops.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The job already has a callback.</exception>
+    public CronJob Start(Func<CronJob, CancellationToken, Task> callback)
     {
-        if (callback is null)
-        {
-            throw new ArgumentNullException(nameof(callback));
-        }
+        ArgumentNullException.ThrowIfNull(callback);
         lock (_lock)
         {
             if (_callback is not null)
             {
-                throw new InvalidOperationException("It is not allowed to schedule two functions using the same CronJob instance.");
+                throw new InvalidOperationException("The job already has a callback.");
             }
             _callback = callback;
         }
@@ -414,25 +402,89 @@ public sealed class CronJob : IDisposable
 
     /// <summary>
     /// Runs the callback now, outside the schedule. Does not count against <see cref="CronJobOptions.MaxRuns"/>.
-    /// Exceptions propagate unless <see cref="CronJobOptions.Catch"/> or <see cref="CronJobOptions.OnError"/> is set.
+    /// Exceptions from the callback go to <see cref="CronJobOptions.OnError"/> when it is set, and otherwise
+    /// to the returned task.
     /// </summary>
-    public Task Trigger() => Run(Now());
+    /// <param name="cancellationToken">Cancels the token passed to the callback, together with stopping the job.</param>
+    public Task TriggerAsync(CancellationToken cancellationToken = default) => TrackRun(Now(), cancellationToken);
+
+    /// <summary>
+    /// Stops the job for good. Running callbacks see their cancellation token cancelled, but are not waited for;
+    /// use <see cref="StopAsync"/> to wait.
+    /// </summary>
+    public void Stop()
+    {
+        lock (_lock)
+        {
+            _kill = true;
+            _timer?.Dispose();
+            _timer = null;
+        }
+        if (!_stopping.IsCancellationRequested)
+        {
+            _stopping.Cancel();
+        }
+    }
+
+    /// <summary>Stops the job for good, and waits until running callbacks have finished.</summary>
+    /// <param name="cancellationToken">Stops waiting; the job is stopped either way.</param>
+    public async Task StopAsync(CancellationToken cancellationToken = default)
+    {
+        Stop();
+        Task[] running;
+        lock (_lock)
+        {
+            running = _inFlight.ToArray();
+        }
+        try
+        {
+            await Task.WhenAll(running).WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            // A failed run has already been reported, to OnError, the thread pool or TriggerAsync's caller.
+        }
+    }
+
+    /// <summary>Stops the job. See <see cref="Stop"/>.</summary>
+    public void Dispose() => Stop();
+
+    /// <summary>Stops the job and waits for running callbacks. See <see cref="StopAsync"/>.</summary>
+    public ValueTask DisposeAsync() => new(StopAsync());
+
+    /// <inheritdoc />
+    public override string ToString() =>
+        (Name is null ? "" : Name + ": ") + (Cron?.ToString() ?? _once?.ToString("O", System.Globalization.CultureInfo.InvariantCulture));
 
     // ------------------------------------------------------------------
     // Scheduling
     // ------------------------------------------------------------------
 
-    private static Func<CronJob, Task> Wrap(Action<CronJob> callback) => job =>
+    private static Cron ParsePattern(string pattern, CronJobOptions? options)
     {
-        callback(job);
-        return Task.CompletedTask;
-    };
+        ArgumentNullException.ThrowIfNull(pattern);
+        return Cron.Parse(pattern, options?.Parser);
+    }
+
+    private static Func<CronJob, CancellationToken, Task> Wrap(Action<CronJob> callback)
+    {
+        ArgumentNullException.ThrowIfNull(callback);
+        return (job, _) =>
+        {
+            callback(job);
+            return Task.CompletedTask;
+        };
+    }
+
+    private static Func<CronJob, CancellationToken, Task> Wrap(Func<CronJob, Task> callback)
+    {
+        ArgumentNullException.ThrowIfNull(callback);
+        return (job, _) => callback(job);
+    }
 
     private DateTimeOffset Now() => _zone.ToZone(_time.GetUtcNow());
 
-    private bool CatchErrors => Options.Catch || Options.OnError is not null;
-
-    private bool ProtectRuns => Options.Protect || Options.OnBlocked is not null;
+    private bool PreventOverlap => Options.PreventOverlap || Options.OnSkipped is not null;
 
     private void ScheduleNext(DateTimeOffset? nowOverride)
     {
@@ -486,7 +538,7 @@ public sealed class CronJob : IDisposable
                 return;
             }
             shouldRun = !_paused && now >= target;
-            isBlocked = _blocking && ProtectRuns;
+            isBlocked = _executing > 0 && PreventOverlap;
             if (shouldRun && !isBlocked && _maxRuns is not null)
             {
                 _maxRuns--;
@@ -497,9 +549,9 @@ public sealed class CronJob : IDisposable
         {
             _ = RunScheduled(now);
         }
-        else if (shouldRun && isBlocked && Options.OnBlocked is Action<CronJob> onBlocked)
+        else if (shouldRun && isBlocked && Options.OnSkipped is Action<CronJob> onSkipped)
         {
-            ThreadPool.QueueUserWorkItem(_ => onBlocked(this));
+            ThreadPool.QueueUserWorkItem(_ => onSkipped(this));
         }
 
         ScheduleNext(shouldRun ? null : now);
@@ -509,51 +561,74 @@ public sealed class CronJob : IDisposable
     {
         try
         {
-            await Run(initiation).ConfigureAwait(false);
+            await TrackRun(initiation, CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
-            // Not caught by the job: surface it like an unhandled exception in a timer callback.
+            // Not handled by OnError: surface it like an unhandled exception in a timer callback.
             ExceptionDispatchInfo info = ExceptionDispatchInfo.Capture(ex);
             ThreadPool.QueueUserWorkItem(_ => info.Throw());
         }
     }
 
-    private async Task Run(DateTimeOffset initiation)
+    private Task TrackRun(DateTimeOffset initiation, CancellationToken cancellationToken)
     {
-        Func<CronJob, Task>? callback;
+        Task run = Run(initiation, cancellationToken);
         lock (_lock)
         {
-            _blocking = true;
+            _inFlight.Add(run);
+        }
+        run.ContinueWith(
+            completed =>
+            {
+                lock (_lock)
+                {
+                    _inFlight.Remove(completed);
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+        return run;
+    }
+
+    private async Task Run(DateTimeOffset initiation, CancellationToken cancellationToken)
+    {
+        Func<CronJob, CancellationToken, Task>? callback;
+        lock (_lock)
+        {
+            _executing++;
             _currentRun = initiation;
             callback = _callback;
         }
+
+        using CancellationTokenSource? linked = cancellationToken.CanBeCanceled
+            ? CancellationTokenSource.CreateLinkedTokenSource(_stopping.Token, cancellationToken)
+            : null;
+        CancellationToken token = linked?.Token ?? _stopping.Token;
 
         try
         {
             if (callback is not null)
             {
-                if (CatchErrors)
+                try
+                {
+                    await callback(this, token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (_stopping.IsCancellationRequested)
+                {
+                    // The job was stopped while the callback ran.
+                }
+                catch (Exception ex) when (Options.OnError is not null)
                 {
                     try
                     {
-                        await callback(this).ConfigureAwait(false);
+                        Options.OnError(ex, this);
                     }
-                    catch (Exception ex)
+                    catch
                     {
-                        try
-                        {
-                            Options.OnError?.Invoke(ex, this);
-                        }
-                        catch
-                        {
-                            // Errors thrown by the error handler must not disrupt the job.
-                        }
+                        // Errors thrown by the error handler must not disrupt the job.
                     }
-                }
-                else
-                {
-                    await callback(this).ConfigureAwait(false);
                 }
             }
         }
@@ -562,7 +637,7 @@ public sealed class CronJob : IDisposable
             lock (_lock)
             {
                 _previousRun = initiation;
-                _blocking = false;
+                _executing--;
             }
         }
     }
@@ -594,7 +669,7 @@ public sealed class CronJob : IDisposable
 
         // With startAt and an interval but no previous run, work out when the last run should have been.
         bool startAtInFutureWithInterval = false;
-        if (previousRun is null && startAt is not null && Options.Interval > TimeSpan.Zero)
+        if (previousRun is null && startAt is not null && Options.MinimumInterval > TimeSpan.Zero)
         {
             previousRun = CalculatePreviousRun(startAt.Value, now);
             if (previousRun is not null)
@@ -619,7 +694,7 @@ public sealed class CronJob : IDisposable
             long past = (reference - once).Ticks;
             if ((startAt is not null && once < startAt - _startAtRounding)
                 || (_currentRun is not null && once + DayOffset <= _currentRun)
-                || (isEnumerating ? past >= 0 : past > TimeSpan.TicksPerSecond && !Options.AllowPast))
+                || (isEnumerating ? past >= 0 : past > TimeSpan.TicksPerSecond && !Options.RunIfPast))
             {
                 return null;
             }
@@ -655,8 +730,8 @@ public sealed class CronJob : IDisposable
         DateTimeOffset? previous;
         try
         {
-            previous = Options.Interval > TimeSpan.FromSeconds(1)
-                ? Cron!.FindOccurrence(TruncateToSecond(reference) - Options.Interval, _zone, true, Direction.Backward)
+            previous = Options.MinimumInterval > TimeSpan.FromSeconds(1)
+                ? Cron!.FindOccurrence(TruncateToSecond(reference) - Options.MinimumInterval, _zone, true, Direction.Backward)
                 : Cron!.FindOccurrence(reference, _zone, false, Direction.Backward);
         }
         catch (CronException)
@@ -672,8 +747,8 @@ public sealed class CronJob : IDisposable
     {
         try
         {
-            return hasPreviousRun && Options.Interval > TimeSpan.FromSeconds(1)
-                ? Cron!.FindOccurrence(TruncateToSecond(reference) + Options.Interval, _zone, true, Direction.Forward)
+            return hasPreviousRun && Options.MinimumInterval > TimeSpan.FromSeconds(1)
+                ? Cron!.FindOccurrence(TruncateToSecond(reference) + Options.MinimumInterval, _zone, true, Direction.Forward)
                 : Cron!.FindOccurrence(reference, _zone, false, Direction.Forward);
         }
         catch (CronException)
@@ -693,7 +768,7 @@ public sealed class CronJob : IDisposable
             return null;
         }
         DateTimeOffset previous = startAt;
-        while (previous + Options.Interval <= now)
+        while (previous + Options.MinimumInterval <= now)
         {
             if (FindNext(previous, true) is not DateTimeOffset next)
             {
@@ -711,22 +786,5 @@ public sealed class CronJob : IDisposable
     {
         long rest = value.Ticks % TimeSpan.TicksPerSecond;
         return _zone.ToZone(rest == 0 ? value : value.AddTicks(TimeSpan.TicksPerSecond - rest));
-    }
-
-    private DateTimeOffset ParseDate(string value)
-    {
-        DateTime parsed = DateTime.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind);
-        if (parsed.Kind != DateTimeKind.Unspecified)
-        {
-            // Carries its own offset ("Z" or "+02:00").
-            return _zone.ToZone(new DateTimeOffset(parsed.ToUniversalTime(), TimeSpan.Zero));
-        }
-        // A wall clock time in the job's time zone.
-        Resolution resolution = _zone.Resolve(parsed);
-        if (resolution.Kind == ResolutionKind.Gap)
-        {
-            throw new ArgumentException($"'{value}' does not exist in the job's time zone.", nameof(value));
-        }
-        return resolution.Earlier;
     }
 }

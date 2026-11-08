@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 namespace Croner.Describing;
 
 /// <summary>
@@ -11,22 +13,22 @@ public interface ICronLanguage
     string EveryMinute { get; }
 
     /// <summary>"Every second"</summary>
-    string EverySecondPhrase { get; }
+    string EverySecond { get; }
 
     /// <summary>"every 5 minutes"</summary>
-    string EveryXMinutes(int step);
+    string EveryXMinutes(int interval);
 
     /// <summary>"every 5 seconds"</summary>
-    string EveryXSeconds(int step);
+    string EveryXSeconds(int interval);
 
     /// <summary>"of every 2 hours"</summary>
-    string EveryXHours(int step);
+    string EveryXHours(int interval);
 
     /// <summary>"At 14:00"</summary>
     string AtTime(string time);
 
     /// <summary>"At 14:00, every 10 seconds"</summary>
-    string AtTimeAndEveryXSeconds(string time, int step);
+    string AtTimeAndEveryXSeconds(string time, int interval);
 
     /// <summary>"At 14:00, at second 10-20"</summary>
     string AtTimeAtSecond(string time, string second);
@@ -71,10 +73,10 @@ public interface ICronLanguage
     string TheNthWeekdayOfTheMonth(int n, string day);
 
     /// <summary>"(if it is also {dow})"</summary>
-    string DomAndDowIfAlso(string dow);
+    string IfAlsoDayOfWeek(string dow);
 
     /// <summary>"(if it is also one of: {dow})"</summary>
-    string DomAndDowIfAlsoOneOf(string dow);
+    string IfAlsoOneOfDaysOfWeek(string dow);
 
     /// <summary>"and"</summary>
     string ListConjunctionAnd { get; }
@@ -83,10 +85,10 @@ public interface ICronLanguage
     string ListConjunctionOr { get; }
 
     /// <summary>Day names, Sunday first.</summary>
-    string[] DayOfWeekNames { get; }
+    IReadOnlyList<string> DayOfWeekNames { get; }
 
     /// <summary>Month names, January first.</summary>
-    string[] MonthNames { get; }
+    IReadOnlyList<string> MonthNames { get; }
 
     /// <summary>Formats a time of day, e.g. "14:00" or "14:00:30". Override for a 12-hour clock.</summary>
     string TimeOfDay(int hour, int minute, int? second) =>
@@ -99,8 +101,8 @@ public interface ICronLanguage
     string PastHourPhrase(string s) => $"hour {s}";
 
     /// <summary>"every 2 months"</summary>
-    string EveryXMonths(int step) => $"every {step} months";
+    string EveryXMonths(int interval) => $"every {interval} months";
 
     /// <summary>"year every 2"</summary>
-    string EveryXYears(int step) => YearPhrase($"every {step}");
+    string EveryXYears(int interval) => YearPhrase($"every {interval}");
 }

@@ -5,7 +5,7 @@ namespace Croner.Tests;
 public class DescribeTests
 {
     private static string Describe(string pattern, bool domAndDow = false) =>
-        Cron.Parse(pattern, new CronParserOptions { DomAndDow = domAndDow }).Describe();
+        Cron.Parse(pattern, new CronParserOptions { RequireBothDayFields = domAndDow }).Describe();
 
     [Theory]
     [InlineData("* * * * *", "Every minute.")]
@@ -45,7 +45,7 @@ public class DescribeTests
     public void English(string pattern, string expected) => Assert.Equal(expected, Describe(pattern));
 
     [Fact]
-    public void DomAndDow()
+    public void RequireBothDayFields()
     {
         Assert.Equal("At 00:00, on day 15 (if it is also Friday).", Describe("0 0 15 * FRI", domAndDow: true));
         Assert.Equal("At 00:00, on day 15 (if it is also Friday).", Describe("0 0 15 * +FRI"));
@@ -67,7 +67,7 @@ public class DescribeTests
     {
         private readonly ICronLanguage _en = Describing.English.Instance;
         public string EveryMinute => _en.EveryMinute;
-        public string EverySecondPhrase => _en.EverySecondPhrase;
+        public string EverySecond => _en.EverySecond;
         public string EveryXMinutes(int step) => _en.EveryXMinutes(step);
         public string EveryXSeconds(int step) => _en.EveryXSeconds(step);
         public string EveryXHours(int step) => _en.EveryXHours(step);
@@ -87,12 +87,12 @@ public class DescribeTests
         public string TheWeekdayNearestDay(string day) => _en.TheWeekdayNearestDay(day);
         public string TheLastWeekdayOfTheMonth(string day) => _en.TheLastWeekdayOfTheMonth(day);
         public string TheNthWeekdayOfTheMonth(int n, string day) => _en.TheNthWeekdayOfTheMonth(n, day);
-        public string DomAndDowIfAlso(string dow) => _en.DomAndDowIfAlso(dow);
-        public string DomAndDowIfAlsoOneOf(string dow) => _en.DomAndDowIfAlsoOneOf(dow);
+        public string IfAlsoDayOfWeek(string dow) => _en.IfAlsoDayOfWeek(dow);
+        public string IfAlsoOneOfDaysOfWeek(string dow) => _en.IfAlsoOneOfDaysOfWeek(dow);
         public string ListConjunctionAnd => _en.ListConjunctionAnd;
         public string ListConjunctionOr => _en.ListConjunctionOr;
-        public string[] DayOfWeekNames => _en.DayOfWeekNames;
-        public string[] MonthNames => _en.MonthNames;
+        public IReadOnlyList<string> DayOfWeekNames => _en.DayOfWeekNames;
+        public IReadOnlyList<string> MonthNames => _en.MonthNames;
 
         public string TimeOfDay(int hour, int minute, int? second)
         {
@@ -121,5 +121,12 @@ public class DescribeTests
         Assert.DoesNotContain("At of", desc);
         Assert.DoesNotContain("At ,", desc);
         Assert.False(desc.StartsWith("At ."));
+    }
+
+    [Fact]
+    public void LanguageNamesAreReadOnly()
+    {
+        Assert.False(Croner.Describing.English.Instance.DayOfWeekNames is string[]);
+        Assert.False(Croner.Describing.Swedish.Instance.MonthNames is string[]);
     }
 }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 
 namespace Croner;
 
@@ -46,24 +47,24 @@ public sealed record CronParserOptions
     /// Default <c>false</c>: a day matching either field matches (OR), as in Vixie cron.
     /// A <c>+</c> prefix on the day-of-week field enables this for a single pattern.
     /// </summary>
-    public bool DomAndDow { get; init; }
+    public bool RequireBothDayFields { get; init; }
 
     /// <summary>
     /// Use Quartz-style weekday numbering, where <c>1</c> is Sunday and <c>7</c> is Saturday.
     /// </summary>
-    public bool AlternativeWeekdays { get; init; }
+    public bool QuartzWeekdays { get; init; }
 
     /// <summary>
     /// Accept the non-standard step syntax <c>0/10</c> (start at 0, step 10) and <c>/10</c> (same as <c>*/10</c>).
     /// Not compliant with OCPS / Vixie cron. Default <c>false</c>.
     /// </summary>
-    public bool SloppyRanges { get; init; }
+    public bool LenientSteps { get; init; }
 }
 
 /// <summary>
 /// Parses cron pattern strings into <see cref="Cron"/> instances.
 /// </summary>
-public sealed class CronParser
+internal sealed class CronParser
 {
     private static readonly char[] BaseAllowed =
         { '*', '/', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ',', '-' };
@@ -74,7 +75,7 @@ public sealed class CronParser
         ("WED", "3"), ("THU", "4"), ("FRI", "5"), ("SAT", "6"),
     };
 
-    private static readonly (string Name, string Value)[] AlternativeWeekdayNames =
+    private static readonly (string Name, string Value)[] QuartzWeekdayNames =
     {
         ("-SUN", "-1"), ("SUN", "1"), ("MON", "2"), ("TUE", "3"),
         ("WED", "4"), ("THU", "5"), ("FRI", "6"), ("SAT", "7"),
@@ -99,10 +100,7 @@ public sealed class CronParser
     /// <exception cref="CronException">The pattern is invalid.</exception>
     public Cron Parse(string pattern)
     {
-        if (pattern is null)
-        {
-            throw new ArgumentNullException(nameof(pattern));
-        }
+        ArgumentNullException.ThrowIfNull(pattern);
 
         string upper = pattern.ToUpperInvariant().Trim();
         if (upper.Length == 0)
@@ -115,10 +113,7 @@ public sealed class CronParser
             upper = HandleNicknames(upper, Options.Seconds == SecondsMode.Required, Options.Year == YearMode.Required);
         }
 
-        string normalized = Replace(upper, Options.AlternativeWeekdays ? AlternativeWeekdayNames : Weekdays);
-        normalized = Replace(normalized, MonthNames);
-
-        var parts = new List<string>(normalized.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var parts = new List<string>(upper.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
         int numParts = parts.Count;
 
         if (numParts == 5)
@@ -163,6 +158,10 @@ public sealed class CronParser
             throw new CronException(CronErrorKind.InvalidPattern, "Pattern must have between 5 and 7 fields.");
         }
 
+        // Names are only valid in their own field, so "0 0 * MON *" is rejected instead of read as January.
+        parts[4] = Replace(parts[4], MonthNames);
+        parts[5] = Replace(parts[5], Options.QuartzWeekdays ? QuartzWeekdayNames : Weekdays);
+
         // '?' is an alias for '*' in day-of-month and day-of-week
         parts[3] = parts[3].Replace('?', '*');
         parts[5] = parts[5].Replace('?', '*');
@@ -183,7 +182,7 @@ public sealed class CronParser
         CronComponent Make(ushort min, ushort max, byte features, ushort offset, string field)
         {
             var c = new CronComponent(min, max, features, offset);
-            c.SetSloppyRanges(Options.SloppyRanges);
+            c.SetLenientSteps(Options.LenientSteps);
             c.Parse(field);
             return c;
         }
@@ -193,11 +192,11 @@ public sealed class CronParser
         var hours = Make(0, 23, CronBits.None, 0, parts[2]);
         var days = Make(1, 31, CronBits.Last | CronBits.ClosestWeekday, 0, parts[3]);
         var months = Make(1, 12, CronBits.None, 0, parts[4]);
-        var daysOfWeek = Make(0, 7, CronBits.Last | CronBits.NthAll, (ushort)(Options.AlternativeWeekdays ? 1 : 0), parts[5]);
-        var years = Make((ushort)Cron.YearLowerLimit, (ushort)Cron.YearUpperLimit, CronBits.None, 0, parts[6]);
+        var daysOfWeek = Make(0, 7, CronBits.Last | CronBits.NthAll, (ushort)(Options.QuartzWeekdays ? 1 : 0), parts[5]);
+        var years = Make((ushort)Cron.MinYear, (ushort)Cron.MaxYear, CronBits.None, 0, parts[6]);
 
         // 7 is Sunday too, in the standard numbering
-        if (!Options.AlternativeWeekdays)
+        if (!Options.QuartzWeekdays)
         {
             foreach (byte bit in new[] { CronBits.All, CronBits.Nth1st, CronBits.Nth2nd, CronBits.Nth3rd, CronBits.Nth4th, CronBits.Nth5th, CronBits.Last })
             {
@@ -211,12 +210,17 @@ public sealed class CronParser
 
         return new Cron(new CronPattern(
             upper, seconds, minutes, hours, days, months, daysOfWeek, years,
-            starDom, starDow, Options.DomAndDow || domAndDowFromPattern));
+            starDom, starDow, Options.RequireBothDayFields || domAndDowFromPattern));
     }
 
-    /// <summary>Tries to parse a cron pattern.</summary>
-    public bool TryParse(string pattern, out Cron? cron)
+    /// <summary>Tries to parse a cron pattern. Returns <c>false</c> when it is <c>null</c> or invalid.</summary>
+    public bool TryParse([NotNullWhen(true)] string? pattern, [NotNullWhen(true)] out Cron? cron)
     {
+        if (pattern is null)
+        {
+            cron = null;
+            return false;
+        }
         try
         {
             cron = Parse(pattern);
@@ -241,8 +245,8 @@ public sealed class CronParser
                     || (i == 5 && ch is '#' or 'L' or '?');
                 if (!allowed)
                 {
-                    throw new CronException(CronErrorKind.IllegalCharacters,
-                        $"CronPattern contains illegal character '{ch}' in part '{part}'");
+                    throw new CronException(CronErrorKind.IllegalCharacter,
+                        $"'{ch}' in field '{part}'");
                 }
             }
         }
