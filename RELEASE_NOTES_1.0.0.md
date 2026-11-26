@@ -51,22 +51,6 @@ await using var job = new CronJob("0 30 7 * * MON-FRI", async (job, cancellation
 - `Describe()` calls `LW` "the last weekday of the month", and no longer calls `0-10/2 * * * *` "every 2 minutes".
 - `CronJob.GetPreviousRuns` from a time with milliseconds includes the run earlier in the same second.
 
-## Upgrading from 1.0.0-preview.2
-
-Most code needs no changes. Check for the following:
-
-- **Stricter parsing.** These patterns used to parse and run on an unintended schedule. They now throw `CronException`, and `Cron.TryParse` returns `false`:
-  - names joined to something else: `SUN6` (was read as 6), `JANFEB` (was 12), `*/FRI` (was `*/5`), `5#FRI`, `DEC1`;
-  - numbers followed by other characters: `15W5` (was `15W`), `LW5`, `5LL`, `5L#2`;
-  - empty list items: `15,,L`, `L,`, `,L`.
-
-  Patterns like `MON-FRI/2`, `JAN,FEB`, `FRI#2`, `FRI#L` and `FRIL` work as before.
-- **`CronComponent.Min`, `Max` and `Step` are `int`** instead of `ushort`.
-- **`CronPattern` equality includes `FixedTimeRule`.** Two otherwise equal patterns parsed with different rules are no longer equal, because they run differently around DST changes.
-- **`ICronLanguage` has a new member, `TheLastWorkingDayOfTheMonth`.** It has an English default, so custom languages still compile. Override it to translate "the last weekday of the month".
-
-If you are upgrading from 1.0.0-preview.1, also see the renamed members listed under 1.0.0-preview.2 in the [changelog](https://github.com/hexagon/croner-dotnet/blob/main/CHANGELOG.md).
-
 ## Links
 
 - [README](https://github.com/hexagon/croner-dotnet#readme): DST rules, OCPS conformance, and a comparison with Cronos, NCrontab and Quartz.NET
