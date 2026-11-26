@@ -35,6 +35,8 @@ public sealed class CronJob : IDisposable, IAsyncDisposable
     private readonly DateTimeOffset? _stopAt;
     private readonly TimeSpan _startAtRounding;
     private readonly DateTimeOffset? _once;
+    // Not disposed: callbacks that are still running hold its token after Stop(), and a source without a timer or
+    // linked tokens holds no resources.
     private readonly CancellationTokenSource _stopping = new();
     private readonly HashSet<Task> _inFlight = new();
 
@@ -730,16 +732,18 @@ public sealed class CronJob : IDisposable, IAsyncDisposable
         DateTimeOffset? previous;
         try
         {
-            previous = Options.MinimumInterval > TimeSpan.FromSeconds(1)
-                ? Cron!.FindOccurrence(TruncateToSecond(reference) - Options.MinimumInterval, _zone, true, Direction.Backward)
-                : Cron!.FindOccurrence(reference, _zone, false, Direction.Backward);
+            // A run counts when it lies at least the minimum interval before the reference, so a run earlier in
+            // the same second as a reference with a fraction of a second counts, unless there is an interval.
+            DateTimeOffset latest = reference - Options.MinimumInterval;
+            bool inclusive = Options.MinimumInterval > TimeSpan.Zero || latest.Ticks % TimeSpan.TicksPerSecond != 0;
+            previous = Cron!.FindOccurrence(inclusive ? TruncateToSecond(latest) : latest, _zone, inclusive, Direction.Backward);
         }
         catch (CronException)
         {
             return null;
         }
 
-        return previous is null || (startAt is not null && previous < startAt) ? null : previous;
+        return startAt is not null && previous < startAt ? null : previous;
     }
 
     /// <summary>The first match after <paramref name="reference"/>, at least one interval after a previous run.</summary>

@@ -105,4 +105,7 @@ public interface ICronLanguage
 
     /// <summary>"year every 2"</summary>
     string EveryXYears(int interval) => YearPhrase($"every {interval}");
+
+    /// <summary><c>LW</c> in the day-of-month field: "the last weekday of the month", the last Monday to Friday.</summary>
+    string TheLastWorkingDayOfTheMonth => "the last weekday of the month";
 }

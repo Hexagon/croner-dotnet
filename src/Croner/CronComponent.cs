@@ -44,6 +44,7 @@ public sealed class CronComponent : IEquatable<CronComponent>
     private byte _enabledFeatures;
     private readonly ushort _inputOffset;
     private bool _lenientSteps;
+    private bool _wrapRanges;
 
     internal CronComponent(ushort min, ushort max, byte features, ushort inputOffset)
     {
@@ -56,18 +57,39 @@ public sealed class CronComponent : IEquatable<CronComponent>
     }
 
     /// <summary>The smallest value this field can take.</summary>
-    public ushort Min { get; }
+    public int Min { get; }
 
     /// <summary>The largest value this field can take.</summary>
-    public ushort Max { get; }
+    public int Max { get; }
 
     /// <summary>The step of the last stepped expression in this field, <c>1</c> when there was none.</summary>
-    public ushort Step { get; private set; } = 1;
+    public int Step { get; private set; } = 1;
 
     /// <summary>Whether the field was written as, or stepped from, a wildcard (<c>*</c>).</summary>
     public bool FromWildcard { get; private set; }
 
     internal void SetLenientSteps(bool lenient) => _lenientSteps = lenient;
+
+    /// <summary>
+    /// Lets a range whose end is before its start wrap around past the maximum, as Quartz does for
+    /// day-of-week ranges like <c>FRI-MON</c> or <c>SAT-SUN</c> (<c>7-1</c>).
+    /// </summary>
+    internal void SetWrapRanges(bool wrap) => _wrapRanges = wrap;
+
+    /// <summary>Whether <c>start-end</c> with <c>start &gt; end</c> wraps around instead of failing.</summary>
+    private bool Wraps(int start, int end) =>
+        _wrapRanges && start > end && start <= Max && end >= Min + _inputOffset;
+
+    /// <summary>Sets <paramref name="bit"/> on every <paramref name="step"/>th value from <paramref name="start"/> to <paramref name="end"/>, wrapping around.</summary>
+    private void SetWrappedRange(int start, int end, int step, byte bit)
+    {
+        int low = Min + _inputOffset;
+        int span = Max - low + 1;
+        for (int value = start; value <= end + span; value += step)
+        {
+            SetBit((ushort)(value > Max ? value - span : value), bit);
+        }
+    }
 
     internal void SetBit(ushort pos, byte bit)
     {
@@ -182,11 +204,9 @@ public sealed class CronComponent : IEquatable<CronComponent>
     {
         if (field == "*")
         {
+            // `*` is the whole field, so nothing else is set yet.
             FromWildcard = true;
-            for (int value = Min; value <= Max; value++)
-            {
-                SetBit((ushort)(value + _inputOffset), CronBits.All);
-            }
+            _bitfields.AsSpan(Min, Max - Min + 1).Fill(CronBits.All);
             return;
         }
 
@@ -195,7 +215,7 @@ public sealed class CronComponent : IEquatable<CronComponent>
             string parsedPart = part.Trim();
             if (parsedPart.Length == 0)
             {
-                continue;
+                throw new CronException(CronErrorKind.InvalidField, $"Empty value in the list '{field}'.");
             }
 
             if (parsedPart.Contains('/'))
@@ -222,12 +242,6 @@ public sealed class CronComponent : IEquatable<CronComponent>
             }
             else
             {
-                // "5L" means "5#L"
-                if (parsedPart.EndsWith('L') && !parsedPart.Contains('#'))
-                {
-                    parsedPart = parsedPart.Replace("L", "#L");
-                }
-
                 if (parsedPart.Contains('#') && !IsFeatureAllowed(CronBits.NthAll))
                 {
                     throw new CronException(CronErrorKind.InvalidField,
@@ -256,32 +270,54 @@ public sealed class CronComponent : IEquatable<CronComponent>
         return value;
     }
 
-    private static byte GetNthBit(string value)
+    /// <summary>
+    /// The bit a day-of-week value sets: <c>#n</c> for the nth weekday of the month, <c>#L</c> or a trailing
+    /// <c>L</c> for the last, and a plain match otherwise.
+    /// </summary>
+    private byte GetNthBit(string value)
     {
-        if (value.EndsWith('L'))
+        byte bit = ReadNthBit(value);
+        if (bit != CronBits.All && !IsFeatureAllowed(CronBits.NthAll))
         {
-            return CronBits.Last;
+            // Only the day-of-week field has nth and last weekdays; L in day-of-month has to stand alone.
+            throw new CronException(CronErrorKind.InvalidField,
+                $"Invalid value '{value}': L and LW have to be values of their own in the day-of-month field.");
         }
+        return bit;
+    }
+
+    private static byte ReadNthBit(string value)
+    {
         int nthPos = value.IndexOf('#');
         if (nthPos < 0)
         {
-            return CronBits.All;
+            return value.EndsWith('L') ? CronBits.Last : CronBits.All;
         }
-        if (!byte.TryParse(value.AsSpan(nthPos + 1), NumberStyles.None, CultureInfo.InvariantCulture, out byte nth))
+        ReadOnlySpan<char> nthPart = value.AsSpan(nthPos + 1);
+        if (nthPart.SequenceEqual("L"))
         {
-            throw new CronException(CronErrorKind.InvalidField, "Invalid nth specifier.");
+            return CronBits.Last;
+        }
+        if (!byte.TryParse(nthPart, NumberStyles.None, CultureInfo.InvariantCulture, out byte nth))
+        {
+            throw new CronException(CronErrorKind.InvalidField, $"Invalid nth specifier in '{value}'.");
         }
         if (nth == 0 || nth > 5)
         {
-            throw new CronException(CronErrorKind.InvalidField, "Nth specifier out of bounds.");
+            throw new CronException(CronErrorKind.InvalidField, $"Nth specifier out of bounds in '{value}'.");
         }
         return CronBits.NthBits[nth - 1];
     }
 
+    /// <summary>Removes the <c>#n</c>, <c>#L</c> or trailing <c>L</c> that <see cref="GetNthBit"/> reads.</summary>
     private static string StripNthPart(string value)
     {
         int idx = value.IndexOf('#');
-        return idx < 0 ? value : value.Substring(0, idx);
+        if (idx >= 0)
+        {
+            return value.Substring(0, idx);
+        }
+        return value.EndsWith('L') ? value.Substring(0, value.Length - 1) : value;
     }
 
     private void HandleClosestWeekday(string value)
@@ -292,12 +328,17 @@ public sealed class CronComponent : IEquatable<CronComponent>
             HandleNumber(value);
             return;
         }
+        if (dayPos != value.Length - 1)
+        {
+            throw new CronException(CronErrorKind.InvalidField,
+                $"Invalid value '{value}': W has to follow a day, as in 15W, or L, as in LW.");
+        }
         string dayStr = value.Substring(0, dayPos);
 
-        // "LW" - last weekday of the month
+        // "LW" - last weekday of the month. The closest-weekday feature on its own means LW, kept apart from
+        // the last-day feature, so "L,LW" keeps both meanings.
         if (string.Equals(dayStr, "L", StringComparison.OrdinalIgnoreCase))
         {
-            EnableFeature(CronBits.Last);
             EnableFeature(CronBits.ClosestWeekday);
             return;
         }
@@ -323,6 +364,12 @@ public sealed class CronComponent : IEquatable<CronComponent>
 
         ushort start = ParseUShort(parts[0].Trim(), "Invalid start of range.");
         ushort end = ParseUShort(parts[1].Trim(), "Invalid end of range.");
+
+        if (Wraps(start, end))
+        {
+            SetWrappedRange(start, end, 1, bitToSet);
+            return;
+        }
 
         if (start > end || start < Min || end > Max)
         {
@@ -411,6 +458,12 @@ public sealed class CronComponent : IEquatable<CronComponent>
         {
             throw new CronException(CronErrorKind.InvalidField,
                 $"Invalid step syntax: single number steps like \"{rangePart}/{stepStr}\" are not allowed. Use \"*/{stepStr}\" for wildcard steps or \"X-Y/{stepStr}\" for range steps.");
+        }
+
+        if (Wraps(start, end))
+        {
+            SetWrappedRange(start, end, step, bitToSet);
+            return;
         }
 
         if (start < Min || end > Max || start > end)

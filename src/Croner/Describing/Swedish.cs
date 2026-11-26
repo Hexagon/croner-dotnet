@@ -92,4 +92,7 @@ public sealed class Swedish : ICronLanguage
     public string EveryXMonths(int interval) => $"var {interval}:e månad";
     /// <inheritdoc />
     public string EveryXYears(int interval) => $"var {interval}:e år";
+
+    /// <inheritdoc />
+    public string TheLastWorkingDayOfTheMonth => "sista vardagen i månaden";
 }

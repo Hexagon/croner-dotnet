@@ -14,6 +14,26 @@ public class CronJobTests
 
     private static CronJobOptions InUtc(CronJobOptions? o = null) => (o ?? new CronJobOptions()) with { UtcOffset = TimeSpan.Zero };
 
+    // Ported from croner for JavaScript 11.0.1: a run earlier in the same second as the reference counts.
+    [Fact]
+    public void PreviousRunsIncludeARunEarlierInTheSameSecond()
+    {
+        var job = new CronJob("* * * * * *", InUtc());
+        Assert.Equal(new[] { Utc(2025, 1, 2, 0, 0, 5), Utc(2025, 1, 2, 0, 0, 4) },
+            job.GetPreviousRuns(Utc(2025, 1, 2, 0, 0, 5, 500)).Take(2));
+        // A whole-second reference is not a previous run of itself
+        Assert.Equal(Utc(2025, 1, 2, 0, 0, 4), job.GetPreviousRuns(Utc(2025, 1, 2, 0, 0, 5)).First());
+    }
+
+    [Theory]
+    [InlineData(1, 4)]
+    [InlineData(2, 3)]
+    public void PreviousRunsWithAnIntervalAreAtLeastThatFarBack(int interval, int expectedSecond)
+    {
+        var job = new CronJob("* * * * * *", InUtc(new CronJobOptions { MinimumInterval = TimeSpan.FromSeconds(interval) }));
+        Assert.Equal(Utc(2025, 1, 2, 0, 0, expectedSecond), job.GetPreviousRuns(Utc(2025, 1, 2, 0, 0, 5, 500)).First());
+    }
+
     [Fact]
     public void NextRunWithoutCallback()
     {

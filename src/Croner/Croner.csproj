@@ -22,6 +22,7 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/hexagon/croner-dotnet</PackageProjectUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>croner.png</PackageIcon>
     <PackageReleaseNotes>https://github.com/hexagon/croner-dotnet/blob/main/CHANGELOG.md</PackageReleaseNotes>
     <RepositoryUrl>https://github.com/hexagon/croner-dotnet</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
@@ -34,6 +35,7 @@
 
   <ItemGroup>
     <None Include="../../README.md" Pack="true" PackagePath="/" />
+    <None Include="../../croner.png" Pack="true" PackagePath="/" />
     <InternalsVisibleTo Include="Croner.Tests" />
   </ItemGroup>
 

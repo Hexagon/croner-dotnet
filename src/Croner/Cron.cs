@@ -13,13 +13,14 @@ internal enum Direction
 
 /// <summary>
 /// Categorizes a cron pattern as either a fixed-time job or an interval/wildcard job.
-/// This decides how daylight saving time transitions are handled.
+/// This decides how daylight saving time transitions are handled. Which patterns are fixed-time
+/// jobs is set with <see cref="CronParserOptions.FixedTimeRule"/>.
 /// </summary>
 public enum JobType
 {
     /// <summary>
-    /// Seconds, minutes and hours are each a single value (for example <c>0 30 2 * * *</c>).
-    /// Such a job runs once when its time repeats (fall back), at the first occurrence, and runs
+    /// With the default <see cref="FixedTimeRule.SingleValue"/>, seconds, minutes and hours are each a
+    /// single value (for example <c>0 30 2 * * *</c>). Such a job runs once when its time repeats (fall back), at the first occurrence, and runs
     /// right after the jump when its time is skipped (spring forward).
     /// </summary>
     FixedTime,
@@ -53,7 +54,9 @@ public sealed class Cron : IEquatable<Cron>, IParsable<Cron>
     public const int MinYear = 1;
 
     private const int MaxSearchIterations = 366 * 24 * 60 * 60;
-    private const int MaxGapSearchSeconds = 3600 * 2;
+    // No real transition skips more than a few days; past this the zone data is not behaving like a time zone.
+    private const long MaxGapSeconds = 7 * 24 * 3600;
+    private const long MaxGapStepSeconds = 3600;
     private const long MaxOverlapSeconds = 86_400;
 
     internal Cron(CronPattern pattern)
@@ -336,7 +339,13 @@ public sealed class Cron : IEquatable<Cron>, IParsable<Cron>
 
     private static JobType ComputeJobType(CronPattern p)
     {
-        static bool IsFixed(CronComponent f) => f.Step == 1 && !f.FromWildcard && f.CountSetValues(CronBits.All) == 1;
+        if (p.FixedTimeRule == FixedTimeRule.All)
+        {
+            return JobType.FixedTime;
+        }
+        bool singleValue = p.FixedTimeRule == FixedTimeRule.SingleValue;
+        bool IsFixed(CronComponent f) =>
+            f.Step == 1 && !f.FromWildcard && (!singleValue || f.CountSetValues(CronBits.All) == 1);
         return IsFixed(p.Seconds) && IsFixed(p.Minutes) && IsFixed(p.Hours) ? JobType.FixedTime : JobType.IntervalWildcard;
     }
 
@@ -501,77 +510,62 @@ public sealed class Cron : IEquatable<Cron>, IParsable<Cron>
                 FindMatchingGranularComponent(ref cursor, direction, TimeComponent.Second);
             }
 
+            if (!IsCivilMatching(cursor))
+            {
+                // Whatever the zone makes of this wall clock time, the search moves on from it.
+                cursor = AddCivilSeconds(cursor, step);
+                continue;
+            }
+
             Resolution resolution = zone.Resolve(cursor);
             switch (resolution.Kind)
             {
                 case ResolutionKind.Single:
-                    if (IsCivilMatching(cursor))
-                    {
-                        return resolution.Earlier;
-                    }
-                    cursor = AddCivilSeconds(cursor, step);
-                    break;
+                    return resolution.Earlier;
 
                 case ResolutionKind.Ambiguous:
-                    // DST overlap (fall back)
-                    if (IsCivilMatching(cursor))
+                {
+                    // DST overlap (fall back). Behind means more than a second past `origin` in the search direction.
+                    bool Behind(DateTimeOffset instant)
                     {
-                        // Behind means more than a second past `origin` in the search direction.
-                        bool Behind(DateTimeOffset instant)
-                        {
-                            DateTimeOffset nudged = zone.AddSeconds(instant, step)
-                                ?? throw new CronException(CronErrorKind.InvalidTime);
-                            return !Precedes(direction, origin, nudged);
-                        }
+                        DateTimeOffset nudged = zone.AddSeconds(instant, step)
+                            ?? throw new CronException(CronErrorKind.InvalidTime);
+                        return !Precedes(direction, origin, nudged);
+                    }
 
-                        if (fixedTime)
+                    if (fixedTime)
+                    {
+                        // A fixed-time job runs once, at the earlier of the two instants.
+                        if (!Behind(resolution.Earlier))
                         {
-                            // A fixed-time job runs once, at the earlier of the two instants.
-                            if (!Behind(resolution.Earlier))
-                            {
-                                return resolution.Earlier;
-                            }
-                        }
-                        else
-                        {
-                            // An interval job runs on both instants; take the first, in search order, that is not behind.
-                            DateTimeOffset near = direction == Direction.Forward ? resolution.Earlier : resolution.Later;
-                            DateTimeOffset far = direction == Direction.Forward ? resolution.Later : resolution.Earlier;
-                            if (!Behind(near))
-                            {
-                                return near;
-                            }
-                            if (!Behind(far))
-                            {
-                                return far;
-                            }
+                            return resolution.Earlier;
                         }
                     }
+                    else
+                    {
+                        // An interval job runs on both instants; take the first, in search order, that is not behind.
+                        DateTimeOffset near = direction == Direction.Forward ? resolution.Earlier : resolution.Later;
+                        DateTimeOffset far = direction == Direction.Forward ? resolution.Later : resolution.Earlier;
+                        if (!Behind(near))
+                        {
+                            return near;
+                        }
+                        if (!Behind(far))
+                        {
+                            return far;
+                        }
+                    }
+
+                    // Every instant this time offers is behind. Advance one second.
                     cursor = AddCivilSeconds(cursor, step);
                     break;
+                }
 
                 case ResolutionKind.Gap:
                     // DST gap (spring forward). Only a wall clock time the pattern schedules is carried past the gap.
-                    if (fixedTime && IsCivilMatching(cursor))
+                    if (fixedTime)
                     {
-                        DateTime afterGap = cursor;
-                        DateTime beforeGap = cursor;
-                        int gapAdjust = 0;
-                        DateTimeOffset resolvedAfterGap;
-                        while (true)
-                        {
-                            afterGap = AddCivilSeconds(afterGap, 1);
-                            if (++gapAdjust > MaxGapSearchSeconds)
-                            {
-                                throw new CronException(CronErrorKind.SearchLimitExceeded);
-                            }
-                            Resolution r = zone.Resolve(afterGap);
-                            if (r.Kind != ResolutionKind.Gap)
-                            {
-                                resolvedAfterGap = r.Earlier;
-                                break;
-                            }
-                        }
+                        (DateTime afterGap, DateTimeOffset resolvedAfterGap) = GapEdge(cursor, Direction.Forward, zone);
 
                         // The fixed hour/minute/second were skipped; only the date fields must still match.
                         if (Pattern.DayMatch(afterGap.Year, afterGap.Month, afterGap.Day, afterGap.DayOfWeek)
@@ -588,27 +582,9 @@ public sealed class Cron : IEquatable<Cron>, IParsable<Cron>
                             }
                         }
 
-                        if (direction == Direction.Backward)
-                        {
-                            gapAdjust = 0;
-                            while (true)
-                            {
-                                beforeGap = AddCivilSeconds(beforeGap, -1);
-                                if (++gapAdjust > MaxGapSearchSeconds)
-                                {
-                                    throw new CronException(CronErrorKind.SearchLimitExceeded);
-                                }
-                                if (zone.Resolve(beforeGap).Kind != ResolutionKind.Gap)
-                                {
-                                    cursor = beforeGap;
-                                    break;
-                                }
-                            }
-                        }
-                        else
-                        {
-                            cursor = afterGap;
-                        }
+                        cursor = direction == Direction.Backward
+                            ? GapEdge(cursor, Direction.Backward, zone).At
+                            : afterGap;
                     }
                     else
                     {
@@ -617,6 +593,68 @@ public sealed class Cron : IEquatable<Cron>, IParsable<Cron>
                     break;
             }
         }
+    }
+
+    /// <summary>
+    /// Finds the first wall clock time past the gap that <paramref name="inGap"/> lies in, searching in
+    /// <paramref name="direction"/>, and the instant it resolves to.
+    /// </summary>
+    /// <remarks>
+    /// The search gallops out of the gap with steps that double up to an hour, then bisects back to the exact
+    /// second, so a gap of any length (such as the whole day <c>Pacific/Apia</c> skipped on 2011-12-30) costs a
+    /// few dozen time zone lookups. Steps never exceed an hour, far shorter than the time between two
+    /// transitions, so the bisection only ever sees the one edge.
+    /// </remarks>
+    private static (DateTime At, DateTimeOffset Instant) GapEdge(DateTime inGap, Direction direction, Zone zone)
+    {
+        int sign = Step(direction);
+        (DateTime At, Resolution Resolution) Probe(long offset)
+        {
+            DateTime at = AddCivilSeconds(inGap, offset * sign);
+            return (at, zone.Resolve(at));
+        }
+
+        // `inside` is always in the gap; `outside` is the first offset found past it.
+        long inside = 0, step = 1, outside;
+        (DateTime At, Resolution Resolution) found;
+        while (true)
+        {
+            long offset = inside + step;
+            if (offset > MaxGapSeconds)
+            {
+                throw new CronException(CronErrorKind.SearchLimitExceeded);
+            }
+            var probe = Probe(offset);
+            if (probe.Resolution.Kind != ResolutionKind.Gap)
+            {
+                outside = offset;
+                found = probe;
+                break;
+            }
+            inside = offset;
+            step = Math.Min(step * 2, MaxGapStepSeconds);
+        }
+
+        while (outside - inside > 1)
+        {
+            long middle = inside + (outside - inside) / 2;
+            var probe = Probe(middle);
+            if (probe.Resolution.Kind == ResolutionKind.Gap)
+            {
+                inside = middle;
+            }
+            else
+            {
+                outside = middle;
+                found = probe;
+            }
+        }
+
+        // A gap and a repeated range never touch in a real zone; take the instant nearest the gap either way.
+        DateTimeOffset instant = found.Resolution.Kind == ResolutionKind.Ambiguous && direction == Direction.Backward
+            ? found.Resolution.Later
+            : found.Resolution.Earlier;
+        return (found.At, instant);
     }
 
     private enum DateComponent

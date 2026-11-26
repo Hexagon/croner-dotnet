@@ -48,8 +48,28 @@ internal static class Describer
         return c.CountSetValues(CronBits.All) == total;
     }
 
-    private static bool IsSteppedFromStart(int step, List<int> vals, int min) =>
-        step > 1 && vals.Count > 0 && vals[0] == min;
+    /// <summary>
+    /// Whether the values of a component are exactly those of <c>*/step</c>, so it can be described as
+    /// "every step". <c>0-10/2</c> and <c>*/15,7</c> also have a step but other values, so they are
+    /// described by their values.
+    /// </summary>
+    private static bool IsEveryStep(CronComponent c, List<int> vals)
+    {
+        if (c.Step <= 1)
+        {
+            return false;
+        }
+        int expected = c.Min;
+        foreach (int v in vals)
+        {
+            if (v != expected)
+            {
+                return false;
+            }
+            expected += c.Step;
+        }
+        return expected > c.Max;
+    }
 
     private static string DescribeTime(CronPattern p, ICronLanguage lang)
     {
@@ -68,7 +88,7 @@ internal static class Describer
         {
             return lang.EveryMinute;
         }
-        if (isDefaultSeconds && IsSteppedFromStart(p.Minutes.Step, min, p.Minutes.Min) && IsAllSet(p.Hours))
+        if (isDefaultSeconds && IsEveryStep(p.Minutes, min) && IsAllSet(p.Hours))
         {
             return lang.AtPhrase(lang.EveryXMinutes(p.Minutes.Step));
         }
@@ -79,7 +99,7 @@ internal static class Describer
             string time = lang.TimeOfDay(hour[0], min[0], null);
             if (!isDefaultSeconds)
             {
-                if (IsSteppedFromStart(p.Seconds.Step, sec, p.Seconds.Min))
+                if (IsEveryStep(p.Seconds, sec))
                 {
                     return lang.AtTimeAndEveryXSeconds(time, p.Seconds.Step);
                 }
@@ -111,12 +131,12 @@ internal static class Describer
         }
         else if (!isDefaultSeconds)
         {
-            parts.Add(IsSteppedFromStart(p.Seconds.Step, sec, p.Seconds.Min)
+            parts.Add(IsEveryStep(p.Seconds, sec)
                 ? lang.EveryXSeconds(p.Seconds.Step)
                 : lang.SecondPhrase(FormatNumberList(sec, lang)));
         }
 
-        if (IsSteppedFromStart(p.Minutes.Step, min, p.Minutes.Min))
+        if (IsEveryStep(p.Minutes, min))
         {
             parts.Add(lang.EveryXMinutes(p.Minutes.Step));
         }
@@ -128,7 +148,7 @@ internal static class Describer
 
         if (!IsAllSet(p.Hours))
         {
-            parts.Add(IsSteppedFromStart(p.Hours.Step, hour, p.Hours.Min)
+            parts.Add(IsEveryStep(p.Hours, hour)
                 ? lang.EveryXHours(p.Hours.Step)
                 : lang.HourPhrase(FormatNumberList(hour, lang)));
         }
@@ -145,7 +165,7 @@ internal static class Describer
     }
 
     private static string HourDescription(CronPattern p, List<int> hour, ICronLanguage lang) =>
-        IsSteppedFromStart(p.Hours.Step, hour, p.Hours.Min)
+        IsEveryStep(p.Hours, hour)
             ? lang.EveryXHours(p.Hours.Step)
             : lang.PastHourPhrase(FormatNumberList(hour, lang));
 
@@ -231,6 +251,10 @@ internal static class Describer
         {
             parts.Add(lang.TheLastDayOfTheMonth);
         }
+        if (p.DaysOfMonth.IsFeatureEnabled(CronBits.ClosestWeekday))
+        {
+            parts.Add(lang.TheLastWorkingDayOfTheMonth);
+        }
         List<int> weekdays = p.DaysOfMonth.GetSetValues(CronBits.ClosestWeekday);
         if (weekdays.Count > 0)
         {
@@ -274,11 +298,12 @@ internal static class Describer
         {
             return "";
         }
-        if (p.Months.Step > 1)
+        List<int> values = p.Months.GetSetValues(CronBits.All);
+        if (IsEveryStep(p.Months, values))
         {
             return lang.InPhrase(lang.EveryXMonths(p.Months.Step));
         }
-        List<string> list = p.Months.GetSetValues(CronBits.All).Select(v => lang.MonthNames[v - 1]).ToList();
+        List<string> list = values.Select(v => lang.MonthNames[v - 1]).ToList();
         return lang.InPhrase(FormatTextList(list, lang));
     }
 

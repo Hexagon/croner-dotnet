@@ -66,6 +66,7 @@ var quartz = Cron.Parse("0 0 12 ? * 2-6", new CronParserOptions
     QuartzWeekdays = true,            // 1 = Sunday ... 7 = Saturday
     RequireBothDayFields = false,     // AND instead of OR for day-of-month and day-of-week
     LenientSteps = false,             // accept non-standard "0/10" and "/10"
+    FixedTimeRule = FixedTimeRule.SingleValue, // which patterns are fixed-time jobs in DST handling
 });
 ```
 
@@ -277,7 +278,10 @@ Advance the clock one run at a time: a single `Advance(TimeSpan.FromHours(3))` i
 | Day of week | Yes | 0-7 or SUN-SAT | `* , - / ? L # +` | `5L` = last Friday, `1#2` = second Monday, `+` prefix = AND with day of month (`L` needs a weekday here) |
 | Year | Optional | 1-5000 | `* , - /` | |
 
-- Patterns are case-insensitive. Leading zeros and extra whitespace are fine. Month names are only accepted in the month field, and weekday names in the day-of-week field.
+- Patterns are case-insensitive. Leading zeros and extra whitespace are fine.
+- Month names are only accepted in the month field, and weekday names in the day-of-week field. A name has to stand alone: `SUN6`, `JANFEB`, `*/FRI` and `5#FRI` are rejected, while `MON-FRI/2`, `JAN,FEB`, `FRI#2` and `FRIL` work.
+- A number is digits only, and a list has no empty items: `15W5`, `5LL` and `1,,5` are rejected. `L` and `LW` are values of their own in the day-of-month field, and can be combined in a list: `L,LW` runs on the last day and on the last weekday of the month.
+- `SAT-SUN` and `MON-SUN` work as expected (`SUN` at the end of a range is 7), and `SUN-SUN` is Sunday only. With `QuartzWeekdays`, a day-of-week range whose end is before its start wraps around the week, as in Quartz: `FRI-MON` is Friday to Monday.
 - With 5 fields, seconds default to `0`; without a year, any year matches.
 - Steps need a starting point, as in Vixie cron and OCPS: `*/10` and `5-59/10` work; `0/10` and `/10` need `LenientSteps`.
 - When both day of month and day of week are set, a day matching **either** runs (OR, as in Vixie cron). Use `RequireBothDayFields = true`, or prefix the day of week with `+` (`0 0 1 * +MON`), to require both.
@@ -294,14 +298,56 @@ Advance the clock one run at a time: a single `Advance(TimeSpan.FromHours(3))` i
 
 Patterns describe wall clock time, but a time zone's clock sometimes skips an hour (spring forward) or repeats one (fall back). Searches walk the wall clock of the requested time zone and resolve those hours by the kind of pattern (`Cron.JobType`):
 
-- **Fixed-time jobs** (single second, minute and hour, e.g. `0 30 2 * * *`):
-  - when the clock jumps forward over the run time, the job runs at the first instant after the jump;
+- **Fixed-time jobs** (by default a single second, minute and hour, e.g. `0 30 2 * * *`):
+  - when the clock jumps forward over the run time, the job runs at the first valid time after the jump, if that time still matches the day, month and year fields;
   - when the clock goes back and the run time happens twice, the job runs once, at the first occurrence.
-- **Interval and wildcard jobs** (everything else, e.g. `*/5 * * * *`):
+- **Interval and wildcard jobs** (everything else, e.g. `*/5 * * * *` or `0 30 1,13 * * *`):
   - times skipped by a jump forward are skipped;
   - times that happen twice run twice, in real order.
 
-Searches never return a time they have already passed, also when starting inside a repeated hour, in either direction.
+Searches never return a time they have already passed, also when starting inside a repeated hour, in either direction. These are the same rules, with the same test cases, as in [croner for JavaScript](https://github.com/Hexagon/croner) (11.x) and [croner-rust](https://github.com/Hexagon/croner-rust) (5.x), and as Vixie cron for single values.
+
+`CronParserOptions.FixedTimeRule` decides which patterns are fixed-time jobs:
+
+| `FixedTimeRule` | Fixed-time jobs | Example |
+| --- | --- | --- |
+| `SingleValue` (default) | one value each in seconds, minutes and hours | `0 30 2 * * *` |
+| `NoWildcard` | no `*` and no step in seconds, minutes and hours, so lists and ranges count too, closer to Vixie cron | `0 30 2,14 * * *` runs at the end of a gap and once in a repeated hour |
+| `All` | every pattern, the behaviour of croner 2.x (croner-rust only; croner for JavaScript has no such value) | `*/30 * * * *` runs a repeated hour once |
+
+Some details:
+
+- A gap that ends at midnight moves a fixed-time run to the next calendar day. In `America/Nuuk` on 30 March 2024 the clock jumped from 23:00 to 00:00, so `30 23 * * *` ran at 00:00 on the 31st, while `30 23 30 * *` had no run in March 2024: the 31st does not match its day field.
+- Gaps of any length are handled. `Pacific/Apia` skipped the whole of 30 December 2011, so `0 12 * * *` ran at 2011-12-31 00:00 and `0 12 30 * *` next on 30 January 2012.
+- Wall clock times are resolved through the zone's conversion from UTC only. `TimeZoneInfo.IsInvalidTime` and `IsAmbiguousTime` miss transitions that change a zone's base offset, such as the one in Apia.
+- These rules deviate from OCPS 1.4 §4.3.1, which runs a fixed-time job in a gap as much later as the gap is long, in the same way as croner for JavaScript and croner-rust.
+
+## OCPS conformance
+
+Croner follows the [Open Cron Pattern Specification](https://github.com/open-source-cron/ocps) (OCPS) 1.0 to 1.4, and the test suite runs every [OCPS conformance test vector](https://github.com/open-source-cron/ocps/blob/main/data/conformance-tests.json). Where croner for JavaScript and croner-rust deviate from OCPS, Croner for .NET does too:
+
+| OCPS | Status | Notes |
+| --- | --- | --- |
+| 1.0 Five fields, lists, ranges, steps, names, OR of day fields | ✅ | |
+| 1.1 Nicknames | ✅ with deviations | Nicknames are case-insensitive (`@Daily` works). `@reboot` is rejected with a clear error: it is an event, not a time. `@midnight` is an extra alias of `@daily`. |
+| 1.2 Seconds and years | ✅ | Years 1 to 5000. |
+| 1.3 `L`, `W`, `LW`, `#` | ✅ | `L` and `LW` also in day-of-month lists. |
+| 1.4 `+` (AND), `?` | ✅ with deviation | DST handling as described above, not §4.3.1. `?` is only accepted in the day fields. |
+
+## Compared with other .NET cron libraries
+
+| | Croner | [Cronos](https://github.com/HangfireIO/Cronos) | [NCrontab](https://github.com/atifaziz/NCrontab) | [Quartz.NET](https://www.quartz-scheduler.net/) `CronExpression` |
+| --- | --- | --- | --- | --- |
+| Fields | 5, 6 (seconds) or 7 (years) | 5 or 6 | 5 or 6 | 6 or 7, seconds required |
+| Day-of-month and day-of-week | OR (Vixie cron, OCPS), `+` or option for AND | AND | AND | one of them must be `?` |
+| `L`, `W`, `LW`, `#` | ✅ | ✅ | ❌ | ✅ |
+| Nicknames | ✅ | ✅ | ❌ | ❌ |
+| Time zones and DST | ✅ any `TimeZoneInfo` | ✅ | ❌ | ✅ |
+| Previous occurrences | ✅ | ✅ | ❌ | ❌ |
+| Plain-language descriptions | ✅ | ❌ | ❌ | ❌ |
+| Job scheduler | ✅ `CronJob`, `TimeProvider` | ❌ | ❌ | ✅ full scheduler |
+
+Around the 2026 DST transitions in `Europe/Stockholm`, Croner, Cronos and Quartz.NET give the same next runs for fixed-time and interval patterns. Finding the next occurrence takes about 70 ns in UTC and 330 ns in a time zone with DST, without allocations, in the same range as Cronos; see `benchmarks/`.
 
 ## Development
 
@@ -309,7 +355,10 @@ Searches never return a time they have already passed, also when starting inside
 dotnet build
 dotnet test
 dotnet pack src/Croner -c Release
+dotnet run -c Release --project benchmarks/Croner.Benchmarks -- --filter '*'
 ```
+
+The pattern syntax, DST rules and test cases are shared with croner for JavaScript and croner-rust. When one of them changes behaviour, port the change and its test cases here.
 
 Releases are published to NuGet by `.github/workflows/build.yml` through trusted publishing: push a tag such as `v1.0.0` and the package is built, tested and pushed with that version.
 

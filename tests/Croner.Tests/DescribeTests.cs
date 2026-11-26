@@ -44,6 +44,26 @@ public class DescribeTests
     [InlineData("0 0 1 */2 *", "At 00:00, on day 1, in every 2 months.")]
     public void English(string pattern, string expected) => Assert.Equal(expected, Describe(pattern));
 
+    // Ported from croner-rust: LW has its own text, and a step is "every N" only when its values are those of */N.
+    [Theory]
+    [InlineData("0 12 LW * *", "At 12:00, on the last weekday of the month.")]
+    [InlineData("0 12 L,LW * *", "At 12:00, on the last day of the month and the last weekday of the month.")]
+    [InlineData("0-10/2 * * * *", "At minute 0, 2, 4, 6, 8, and 10 past every hour.")]
+    [InlineData("0-10/2 0 * * * *", "At second 0, 2, 4, 6, 8, and 10, minute 0 past every hour.")]
+    [InlineData("0 0-12/3 * * *", "At minute 0, of hour 0, 3, 6, 9, and 12.")]
+    [InlineData("* 0-6/2 * * *", "Every minute past hour 0, 2, 4, and 6.")]
+    [InlineData("0 0 * 1-6/2 *", "At 00:00, in January, March, and May.")]
+    [InlineData("0 0 * 6-12/2 *", "At 00:00, in June, August, October, and December.")]
+    [InlineData("*/15,7 * * * *", "At minute 0, 7, 15, 30, and 45 past every hour.")]
+    [InlineData("*/20,10-12/2 * * * *", "At minute 0, 10, 12, 20, and 40 past every hour.")]
+    [InlineData("0-58/2 * * * *", "At every 2 minutes.")]
+    [InlineData("0 0 1 1-12/3 *", "At 00:00, on day 1, in every 3 months.")]
+    public void EnglishParity(string pattern, string expected) => Assert.Equal(expected, Describe(pattern));
+
+    [Fact]
+    public void SwedishLastWeekday() =>
+        Assert.Equal("Klockan 12:00, på sista vardagen i månaden.", Cron.Parse("0 12 LW * *").Describe(Describing.Swedish.Instance));
+
     [Fact]
     public void RequireBothDayFields()
     {
