@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
+using System.Text;
 
 namespace Croner;
 
@@ -28,6 +30,39 @@ public enum YearMode
 
     /// <summary>Patterns must not have a year field.</summary>
     Disallowed,
+}
+
+/// <summary>
+/// Which patterns count as fixed-time jobs in daylight saving time (DST) handling. See <see cref="JobType"/>.
+/// </summary>
+/// <remarks>
+/// A fixed-time job runs once when its wall clock time happens twice (fall back), and runs at the first
+/// valid time after a gap (spring forward). Any other job is an interval job, which runs on both passes of
+/// a repeated time and skips times in a gap. Matches the <c>fixedTimeRule</c> option of croner for
+/// JavaScript and croner-rust.
+/// </remarks>
+public enum FixedTimeRule
+{
+    /// <summary>
+    /// The default. Seconds, minutes and hours each hold a single value, such as <c>0 30 2 * * *</c>.
+    /// A list or range, such as <c>0 30 1,13 * * *</c>, makes an interval job.
+    /// </summary>
+    SingleValue,
+
+    /// <summary>
+    /// Seconds, minutes and hours hold no wildcard (<c>*</c>) and no step (<c>/</c>), so lists and ranges
+    /// such as <c>0 30 2,14 * * *</c> count as fixed-time too. This is closer to Vixie cron. Unlike Vixie
+    /// cron, a step without <c>*</c> (for example <c>0 0-23/2 * * *</c>) still makes an interval job.
+    /// </summary>
+    NoWildcard,
+
+    /// <summary>
+    /// Every pattern is a fixed-time job, including <c>*/30 * * * *</c>: a repeated hour runs once, on its
+    /// first pass, and times in a gap run once at its end. This is the DST behaviour of croner 2.x, kept for
+    /// schedules that depend on it. A forward search still never returns a time before its start.
+    /// Matches croner-rust; croner for JavaScript has no such value.
+    /// </summary>
+    All,
 }
 
 /// <summary>Options that control how cron patterns are parsed.</summary>
@@ -59,6 +94,11 @@ public sealed record CronParserOptions
     /// Not compliant with OCPS / Vixie cron. Default <c>false</c>.
     /// </summary>
     public bool LenientSteps { get; init; }
+
+    /// <summary>
+    /// Which patterns count as fixed-time jobs in DST handling. Default <see cref="Croner.FixedTimeRule.SingleValue"/>.
+    /// </summary>
+    public FixedTimeRule FixedTimeRule { get; init; } = FixedTimeRule.SingleValue;
 }
 
 /// <summary>
@@ -69,23 +109,10 @@ internal sealed class CronParser
     private static readonly char[] BaseAllowed =
         { '*', '/', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ',', '-' };
 
-    private static readonly (string Name, string Value)[] Weekdays =
-    {
-        ("-SUN", "-7"), ("SUN", "0"), ("MON", "1"), ("TUE", "2"),
-        ("WED", "3"), ("THU", "4"), ("FRI", "5"), ("SAT", "6"),
-    };
+    private static readonly string[] WeekdayNames = { "SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT" };
 
-    private static readonly (string Name, string Value)[] QuartzWeekdayNames =
-    {
-        ("-SUN", "-1"), ("SUN", "1"), ("MON", "2"), ("TUE", "3"),
-        ("WED", "4"), ("THU", "5"), ("FRI", "6"), ("SAT", "7"),
-    };
-
-    private static readonly (string Name, string Value)[] MonthNames =
-    {
-        ("JAN", "1"), ("FEB", "2"), ("MAR", "3"), ("APR", "4"), ("MAY", "5"), ("JUN", "6"),
-        ("JUL", "7"), ("AUG", "8"), ("SEP", "9"), ("OCT", "10"), ("NOV", "11"), ("DEC", "12"),
-    };
+    private static readonly string[] MonthNames =
+        { "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC" };
 
     /// <summary>Creates a parser with the given options, or the defaults.</summary>
     public CronParser(CronParserOptions? options = null)
@@ -159,8 +186,17 @@ internal sealed class CronParser
         }
 
         // Names are only valid in their own field, so "0 0 * MON *" is rejected instead of read as January.
-        parts[4] = Replace(parts[4], MonthNames);
-        parts[5] = Replace(parts[5], Options.QuartzWeekdays ? QuartzWeekdayNames : Weekdays);
+        parts[4] = ReplaceNames(parts[4], "month", MonthNames, (i, _) => i + 1);
+        bool quartz = Options.QuartzWeekdays;
+        string dow = parts[5];
+        parts[5] = ReplaceNames(dow, "day-of-week", WeekdayNames, (i, start) =>
+        {
+            // `-SUN` ends a range, so in standard mode it is read as 7 to make ranges like SAT-SUN work.
+            // SUN-SUN stays Sunday only. In Quartz mode SUN is 1 and X-SUN is a range that wraps around the week.
+            bool endsRange = start > 0 && dow[start - 1] == '-'
+                && !(start >= 4 && string.CompareOrdinal(dow, start - 4, "SUN", 0, 3) == 0);
+            return quartz ? i + 1 : i == 0 && endsRange ? 7 : i;
+        });
 
         // '?' is an alias for '*' in day-of-month and day-of-week
         parts[3] = parts[3].Replace('?', '*');
@@ -179,10 +215,11 @@ internal sealed class CronParser
         bool starDom = parts[3] == "*";
         bool starDow = parts[5] == "*";
 
-        CronComponent Make(ushort min, ushort max, byte features, ushort offset, string field)
+        CronComponent Make(ushort min, ushort max, byte features, ushort offset, string field, bool wrapRanges = false)
         {
             var c = new CronComponent(min, max, features, offset);
             c.SetLenientSteps(Options.LenientSteps);
+            c.SetWrapRanges(wrapRanges);
             c.Parse(field);
             return c;
         }
@@ -192,7 +229,8 @@ internal sealed class CronParser
         var hours = Make(0, 23, CronBits.None, 0, parts[2]);
         var days = Make(1, 31, CronBits.Last | CronBits.ClosestWeekday, 0, parts[3]);
         var months = Make(1, 12, CronBits.None, 0, parts[4]);
-        var daysOfWeek = Make(0, 7, CronBits.Last | CronBits.NthAll, (ushort)(Options.QuartzWeekdays ? 1 : 0), parts[5]);
+        var daysOfWeek = Make(0, 7, CronBits.Last | CronBits.NthAll, (ushort)(Options.QuartzWeekdays ? 1 : 0), parts[5],
+            wrapRanges: Options.QuartzWeekdays); // Quartz wraps SAT-SUN (7-1) and FRI-MON (6-2) around the week
         var years = Make((ushort)Cron.MinYear, (ushort)Cron.MaxYear, CronBits.None, 0, parts[6]);
 
         // 7 is Sunday too, in the standard numbering
@@ -210,7 +248,7 @@ internal sealed class CronParser
 
         return new Cron(new CronPattern(
             upper, seconds, minutes, hours, days, months, daysOfWeek, years,
-            starDom, starDow, Options.RequireBothDayFields || domAndDowFromPattern));
+            starDom, starDow, Options.RequireBothDayFields || domAndDowFromPattern, Options.FixedTimeRule));
     }
 
     /// <summary>Tries to parse a cron pattern. Returns <c>false</c> when it is <c>null</c> or invalid.</summary>
@@ -271,12 +309,57 @@ internal sealed class CronParser
         return (withSeconds ? "0 " : "") + basePattern + (withYear ? " *" : "");
     }
 
-    private static string Replace(string pattern, (string Name, string Value)[] names)
+    /// <summary>
+    /// Replaces the three-letter names in an upper-cased field with their numbers.
+    /// </summary>
+    /// <remarks>
+    /// As in croner for JavaScript and croner-rust, a name has to stand alone: it may not follow a letter,
+    /// digit, <c>/</c> or <c>#</c>, and may not be followed by a digit or a letter other than <c>L</c>
+    /// (as in <c>FRIL</c>). So <c>SUN6</c>, <c>JANFEB</c>, <c>*/FRI</c> and <c>5#FRI</c> are rejected
+    /// instead of being read as numbers. <paramref name="value"/> gets the index of the name and its position.
+    /// </remarks>
+    private static string ReplaceNames(string field, string fieldName, string[] names, Func<int, int, int> value)
     {
-        foreach (var (name, value) in names)
+        bool hasLetter = false;
+        foreach (char ch in field)
         {
-            pattern = pattern.Replace(name, value, StringComparison.Ordinal);
+            if (ch is >= 'A' and <= 'Z')
+            {
+                hasLetter = true;
+                break;
+            }
         }
-        return pattern;
+        if (!hasLetter)
+        {
+            return field;
+        }
+
+        var result = new StringBuilder(field.Length);
+        int pos = 0;
+        while (pos < field.Length)
+        {
+            int found = pos + 3 <= field.Length
+                ? Array.FindIndex(names, n => string.CompareOrdinal(field, pos, n, 0, 3) == 0)
+                : -1;
+            if (found < 0)
+            {
+                // Not a name; anything illegal is rejected later.
+                result.Append(field[pos]);
+                pos++;
+                continue;
+            }
+
+            bool beforeOk = pos == 0 || !(char.IsAsciiLetterOrDigit(field[pos - 1]) || field[pos - 1] is '/' or '#');
+            bool afterOk = pos + 3 >= field.Length
+                || !(char.IsAsciiDigit(field[pos + 3]) || (char.IsAsciiLetter(field[pos + 3]) && field[pos + 3] != 'L'));
+            if (!beforeOk || !afterOk)
+            {
+                throw new CronException(CronErrorKind.IllegalCharacter,
+                    $"the {fieldName} name '{names[found]}' in '{field}' has to stand alone: it can not be joined to a letter, digit, '/' or '#'.");
+            }
+            result.Append(value(found, pos).ToString(CultureInfo.InvariantCulture));
+            pos += 3;
+        }
+        return result.ToString();
     }
 }

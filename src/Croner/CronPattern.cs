@@ -19,7 +19,8 @@ public sealed class CronPattern : IEquatable<CronPattern>
         CronComponent years,
         bool starDom,
         bool starDow,
-        bool domAndDow)
+        bool domAndDow,
+        FixedTimeRule fixedTimeRule = FixedTimeRule.SingleValue)
     {
         Expression = pattern;
         Seconds = seconds;
@@ -32,6 +33,7 @@ public sealed class CronPattern : IEquatable<CronPattern>
         IsDayOfMonthWildcard = starDom;
         IsDayOfWeekWildcard = starDow;
         RequiresBothDayFields = domAndDow;
+        FixedTimeRule = fixedTimeRule;
     }
 
     /// <summary>The pattern string, after nicknames such as <c>@daily</c> were expanded and it was upper-cased.</summary>
@@ -74,6 +76,12 @@ public sealed class CronPattern : IEquatable<CronPattern>
     /// </summary>
     public bool RequiresBothDayFields { get; }
 
+    /// <summary>
+    /// Which patterns count as fixed-time jobs in DST handling, from the parser's
+    /// <see cref="CronParserOptions.FixedTimeRule"/> option.
+    /// </summary>
+    public FixedTimeRule FixedTimeRule { get; }
+
     internal bool YearMatch(int year)
     {
         if (year < Cron.MinYear || year > Cron.MaxYear)
@@ -109,18 +117,16 @@ public sealed class CronPattern : IEquatable<CronPattern>
         bool dayMatches = DaysOfMonth.Has(day, CronBits.All);
         bool dowMatches = false;
 
-        bool lastEnabled = DaysOfMonth.IsFeatureEnabled(CronBits.Last);
-        bool closestEnabled = DaysOfMonth.IsFeatureEnabled(CronBits.ClosestWeekday);
-
-        // LW (last weekday) - both LAST and CLOSEST_WEEKDAY enabled
-        if (!dayMatches && lastEnabled && closestEnabled
+        // LW (last weekday of the month)
+        if (!dayMatches && DaysOfMonth.IsFeatureEnabled(CronBits.ClosestWeekday)
             && day == LastWeekdayOfMonth(monthLength, Shift(weekday, monthLength - day)))
         {
             dayMatches = true;
         }
-        else if (!dayMatches && lastEnabled && !closestEnabled && day == monthLength)
+
+        // L (last day of the month)
+        if (!dayMatches && DaysOfMonth.IsFeatureEnabled(CronBits.Last) && day == monthLength)
         {
-            // L (last day of month)
             dayMatches = true;
         }
 
@@ -241,7 +247,8 @@ public sealed class CronPattern : IEquatable<CronPattern>
     /// <summary>
     /// Two patterns are equal when their parsed fields are equal, regardless of how the pattern
     /// strings were written: names or numbers, letter case, <c>?</c> or <c>*</c>, and the parser's
-    /// weekday numbering do not matter.
+    /// weekday numbering do not matter. The <see cref="FixedTimeRule"/> does, as it changes when the
+    /// pattern runs around DST transitions.
     /// </summary>
     public bool Equals(CronPattern? other)
     {
@@ -258,7 +265,8 @@ public sealed class CronPattern : IEquatable<CronPattern>
             && Years.Equals(other.Years)
             && IsDayOfMonthWildcard == other.IsDayOfMonthWildcard
             && IsDayOfWeekWildcard == other.IsDayOfWeekWildcard
-            && RequiresBothDayFields == other.RequiresBothDayFields;
+            && RequiresBothDayFields == other.RequiresBothDayFields
+            && FixedTimeRule == other.FixedTimeRule;
     }
 
     /// <inheritdoc />
@@ -267,5 +275,5 @@ public sealed class CronPattern : IEquatable<CronPattern>
     /// <inheritdoc />
     public override int GetHashCode() =>
         HashCode.Combine(Seconds, Minutes, Hours, DaysOfMonth, Months, DaysOfWeek, Years,
-            HashCode.Combine(IsDayOfMonthWildcard, IsDayOfWeekWildcard, RequiresBothDayFields));
+            HashCode.Combine(IsDayOfMonthWildcard, IsDayOfWeekWildcard, RequiresBothDayFields, FixedTimeRule));
 }
