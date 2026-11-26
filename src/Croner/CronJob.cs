@@ -730,9 +730,11 @@ public sealed class CronJob : IDisposable, IAsyncDisposable
         DateTimeOffset? previous;
         try
         {
-            previous = Options.MinimumInterval > TimeSpan.FromSeconds(1)
-                ? Cron!.FindOccurrence(TruncateToSecond(reference) - Options.MinimumInterval, _zone, true, Direction.Backward)
-                : Cron!.FindOccurrence(reference, _zone, false, Direction.Backward);
+            // A run counts when it lies at least the minimum interval before the reference, so a run earlier in
+            // the same second as a reference with a fraction of a second counts, unless there is an interval.
+            DateTimeOffset latest = reference - Options.MinimumInterval;
+            bool inclusive = Options.MinimumInterval > TimeSpan.Zero || latest.Ticks % TimeSpan.TicksPerSecond != 0;
+            previous = Cron!.FindOccurrence(inclusive ? TruncateToSecond(latest) : latest, _zone, inclusive, Direction.Backward);
         }
         catch (CronException)
         {
