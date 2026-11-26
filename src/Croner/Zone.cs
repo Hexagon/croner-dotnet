@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.CompilerServices;
 
 namespace Croner;
 
@@ -50,8 +51,14 @@ internal sealed class Zone
 
     public static readonly Zone Utc = new(null, TimeSpan.Zero);
 
-    public static Zone Of(TimeZoneInfo tz) =>
-        tz == TimeZoneInfo.Utc ? Utc : new Zone(tz ?? throw new ArgumentNullException(nameof(tz)), TimeSpan.Zero);
+    // GetAdjustmentRules() copies every rule of the zone, so a zone is set up once per TimeZoneInfo instance.
+    private static readonly ConditionalWeakTable<TimeZoneInfo, Zone> Zones = new();
+
+    public static Zone Of(TimeZoneInfo tz)
+    {
+        ArgumentNullException.ThrowIfNull(tz);
+        return tz == TimeZoneInfo.Utc ? Utc : Zones.GetValue(tz, static z => new Zone(z, TimeSpan.Zero));
+    }
 
     public static Zone Fixed(TimeSpan offset) => offset == TimeSpan.Zero ? Utc : new Zone(null, offset);
 

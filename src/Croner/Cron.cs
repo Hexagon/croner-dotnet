@@ -510,58 +510,60 @@ public sealed class Cron : IEquatable<Cron>, IParsable<Cron>
                 FindMatchingGranularComponent(ref cursor, direction, TimeComponent.Second);
             }
 
+            if (!IsCivilMatching(cursor))
+            {
+                // Whatever the zone makes of this wall clock time, the search moves on from it.
+                cursor = AddCivilSeconds(cursor, step);
+                continue;
+            }
+
             Resolution resolution = zone.Resolve(cursor);
             switch (resolution.Kind)
             {
                 case ResolutionKind.Single:
-                    if (IsCivilMatching(cursor))
-                    {
-                        return resolution.Earlier;
-                    }
-                    cursor = AddCivilSeconds(cursor, step);
-                    break;
+                    return resolution.Earlier;
 
                 case ResolutionKind.Ambiguous:
-                    // DST overlap (fall back)
-                    if (IsCivilMatching(cursor))
+                {
+                    // DST overlap (fall back). Behind means more than a second past `origin` in the search direction.
+                    bool Behind(DateTimeOffset instant)
                     {
-                        // Behind means more than a second past `origin` in the search direction.
-                        bool Behind(DateTimeOffset instant)
-                        {
-                            DateTimeOffset nudged = zone.AddSeconds(instant, step)
-                                ?? throw new CronException(CronErrorKind.InvalidTime);
-                            return !Precedes(direction, origin, nudged);
-                        }
+                        DateTimeOffset nudged = zone.AddSeconds(instant, step)
+                            ?? throw new CronException(CronErrorKind.InvalidTime);
+                        return !Precedes(direction, origin, nudged);
+                    }
 
-                        if (fixedTime)
+                    if (fixedTime)
+                    {
+                        // A fixed-time job runs once, at the earlier of the two instants.
+                        if (!Behind(resolution.Earlier))
                         {
-                            // A fixed-time job runs once, at the earlier of the two instants.
-                            if (!Behind(resolution.Earlier))
-                            {
-                                return resolution.Earlier;
-                            }
-                        }
-                        else
-                        {
-                            // An interval job runs on both instants; take the first, in search order, that is not behind.
-                            DateTimeOffset near = direction == Direction.Forward ? resolution.Earlier : resolution.Later;
-                            DateTimeOffset far = direction == Direction.Forward ? resolution.Later : resolution.Earlier;
-                            if (!Behind(near))
-                            {
-                                return near;
-                            }
-                            if (!Behind(far))
-                            {
-                                return far;
-                            }
+                            return resolution.Earlier;
                         }
                     }
+                    else
+                    {
+                        // An interval job runs on both instants; take the first, in search order, that is not behind.
+                        DateTimeOffset near = direction == Direction.Forward ? resolution.Earlier : resolution.Later;
+                        DateTimeOffset far = direction == Direction.Forward ? resolution.Later : resolution.Earlier;
+                        if (!Behind(near))
+                        {
+                            return near;
+                        }
+                        if (!Behind(far))
+                        {
+                            return far;
+                        }
+                    }
+
+                    // Every instant this time offers is behind. Advance one second.
                     cursor = AddCivilSeconds(cursor, step);
                     break;
+                }
 
                 case ResolutionKind.Gap:
                     // DST gap (spring forward). Only a wall clock time the pattern schedules is carried past the gap.
-                    if (fixedTime && IsCivilMatching(cursor))
+                    if (fixedTime)
                     {
                         (DateTime afterGap, DateTimeOffset resolvedAfterGap) = GapEdge(cursor, Direction.Forward, zone);
 

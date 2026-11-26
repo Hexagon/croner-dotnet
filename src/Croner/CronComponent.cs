@@ -57,13 +57,13 @@ public sealed class CronComponent : IEquatable<CronComponent>
     }
 
     /// <summary>The smallest value this field can take.</summary>
-    public ushort Min { get; }
+    public int Min { get; }
 
     /// <summary>The largest value this field can take.</summary>
-    public ushort Max { get; }
+    public int Max { get; }
 
     /// <summary>The step of the last stepped expression in this field, <c>1</c> when there was none.</summary>
-    public ushort Step { get; private set; } = 1;
+    public int Step { get; private set; } = 1;
 
     /// <summary>Whether the field was written as, or stepped from, a wildcard (<c>*</c>).</summary>
     public bool FromWildcard { get; private set; }
@@ -204,11 +204,9 @@ public sealed class CronComponent : IEquatable<CronComponent>
     {
         if (field == "*")
         {
+            // `*` is the whole field, so nothing else is set yet.
             FromWildcard = true;
-            for (int value = Min; value <= Max; value++)
-            {
-                SetBit((ushort)(value + _inputOffset), CronBits.All);
-            }
+            _bitfields.AsSpan(Min, Max - Min + 1).Fill(CronBits.All);
             return;
         }
 
